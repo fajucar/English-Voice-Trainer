@@ -1,0 +1,60 @@
+Crie um app web PWA, mobile-first, para eu treinar fala em inglês com frases. Uso pessoal, só eu vou usar. Quero o código completo, pronto para colar e publicar na Vercel, sem enrolação. Use HTML, CSS e JavaScript puro, em um projeto simples, sem backend e sem chave de API.
+
+OBJETIVO
+O app fala uma frase em português, eu falo a frase em inglês, ele valida e me corrige. Só avança quando eu acertar (ou usar o pulo de segurança descrito abaixo).
+
+TECNOLOGIA (tudo grátis, tudo no navegador)
+- Voz para texto: Web Speech API (SpeechRecognition, lang en-US)
+- Texto para voz: speechSynthesis, voz pt-BR para a frase em português e en-US para o inglês
+- Progresso salvo no localStorage
+- PWA com manifest.json, ícones e service worker simples, para instalar na tela inicial do celular e funcionar offline (as frases ficam num arquivo phrases.json dentro do projeto)
+
+FLUXO DO TREINO
+1. O app fala a frase em português.
+2. ESPERAR o fim da fala (evento onend do speechSynthesis) antes de abrir o microfone, senão ele capta a própria voz.
+3. O microfone abre e eu falo em inglês.
+4. Mostrar a transcrição e comparar com a frase correta.
+5. Se acertei: feedback verde, tocar a frase correta em inglês, avançar sozinho após 1,5 segundo.
+6. Se errei ou não falei: destacar em vermelho só as palavras que diferem, tocar a pronúncia correta em inglês, NÃO avançar e manter o botão "Tentar de novo".
+
+COMPARAÇÃO INTELIGENTE
+- Comparar palavra por palavra
+- Ignorar maiúsculas, pontuação e acentos
+- Tratar contrações como equivalentes (I'm = I am, don't = do not, it's = it is)
+- Tratar números como equivalentes (5 = five)
+- Aceitar como acerto quando a similaridade for maior ou igual a 85%
+- Mostrar o resultado como "precisão do reconhecimento: X%" (não chamar de precisão de pronúncia, porque o app só mede se o texto transcrito bateu com a frase)
+
+TRAVA ANTI-FRUSTRAÇÃO
+- Depois de 3 tentativas erradas na mesma frase, aparecer o botão "Eu falei certo, avançar"
+- A frase marcada assim também entra na lista de revisão
+
+OUTRAS FUNÇÕES
+- Botão "Ouvir exemplo" em inglês antes de tentar
+- Botão para ouvir mais devagar (rate 0.7)
+- Repetição espaçada simples: frase que errei volta no dia seguinte, acertou volta em 3 dias, depois 7, depois 15
+- Lista de "Revisão prioritária" com frases que errei mais de 3 vezes
+- Filtro por categoria
+- Contador de acertos do dia e sequência de dias seguidos
+- Progresso salvo: ao reabrir, continua de onde parei
+
+FRASES
+- Estrutura do phrases.json: [{ "id": 1, "portuguese": "...", "english": "...", "category": "..." }]
+- Use inglês americano (bathroom ou restroom, nunca toilet)
+- Gere 60 frases de exemplo em 6 categorias (cumprimentos, restaurante, viagem, trabalho, compras, emergências), para eu já testar. Depois eu adiciono o resto no mesmo formato.
+
+VISUAL
+- Tema escuro, limpo, botão de microfone grande no centro embaixo (uso com uma mão), animação quando estiver ouvindo
+- Fonte grande na frase, fácil de ler andando na rua
+
+TRATAMENTO DE ERROS
+- Permissão do microfone negada: mensagem clara em português explicando como liberar
+- Navegador sem suporte a SpeechRecognition: aviso claro (sugerir Chrome no Android)
+- Se não captar nada em 6 segundos, contar como tentativa sem falar e repetir o exemplo
+
+ENTREGUE
+- Todos os arquivos completos
+- Estrutura de pastas
+- Passo a passo curto para publicar na Vercel e instalar na tela inicial do celular
+
+Tom dos textos do app: informal e direto. Não use travessão em nenhum texto.

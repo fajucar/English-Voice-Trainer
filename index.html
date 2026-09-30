@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>English Voice Trainer</title>
+  <meta name="description" content="Treine fala em inglês com frases e retorno de voz em tempo real." />
+  <meta name="theme-color" content="#090d16" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+
+  <!-- Top App Bar -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+        </svg>
+      </div>
+      <span class="brand-title">Voice Trainer</span>
+    </div>
+
+    <div class="stats-badges">
+      <div class="stat-badge streak" title="Dias seguidos praticando">
+        <span>🔥</span>
+        <span id="streakCount">0</span>d
+      </div>
+      <div class="stat-badge today" title="Acertos de hoje">
+        <span>🎯</span>
+        <span id="todayCount">0</span>
+      </div>
+      <button id="btnOpenReview" class="icon-btn" title="Revisão Prioritária" aria-label="Abrir lista de revisão">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+        </svg>
+      </button>
+      <button id="btnOpenSettings" class="icon-btn" title="Ajuda e Informações" aria-label="Ajuda e Ajustes">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Categories Horizontal Bar -->
+  <nav class="categories-bar" id="categoriesBar" aria-label="Filtro de Categorias">
+    <button class="category-chip active" data-cat="all">Todas (60)</button>
+    <button class="category-chip" data-cat="cumprimentos">Cumprimentos</button>
+    <button class="category-chip" data-cat="restaurante">Restaurante</button>
+    <button class="category-chip" data-cat="viagem">Viagem</button>
+    <button class="category-chip" data-cat="trabalho">Trabalho</button>
+    <button class="category-chip" data-cat="compras">Compras</button>
+    <button class="category-chip" data-cat="emergências">Emergências</button>
+    <button class="category-chip" data-cat="srs">Para Hoje (SRS)</button>
+  </nav>
+
+  <!-- Main View -->
+  <main class="main-content">
+
+    <!-- Progress Indicator -->
+    <div class="progress-card">
+      <span id="phraseCounter">Frase 1 de 60</span>
+      <span id="phraseAttemptIndicator">Tentativa: 1</span>
+    </div>
+    <div class="progress-bar-container">
+      <div class="progress-bar-fill" id="progressBarFill"></div>
+    </div>
+
+    <!-- Alert / System Notices -->
+    <div id="statusAlert" class="status-msg hidden"></div>
+
+    <!-- Practice Card -->
+    <section class="practice-card" id="practiceCard">
+      <div class="card-top-info">
+        <span class="badge-category" id="badgeCategory">Cumprimentos</span>
+        <span class="badge-srs" id="badgeSrs" title="Próxima repetição espaçada">
+          <span>📅</span> <span id="srsIntervalText">Nova</span>
+        </span>
+      </div>
+
+      <!-- Portuguese Phrase to Translate -->
+      <div class="prompt-section">
+        <span class="prompt-label">Diga em inglês:</span>
+        <h1 class="phrase-pt" id="phrasePt">Oi, como vai você hoje?</h1>
+      </div>
+
+      <!-- Audio buttons -->
+      <div class="audio-actions">
+        <button id="btnSpeakPt" class="btn-audio" title="Ouvir em português">
+          <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+          Ouvir em Português
+        </button>
+        <button id="btnListenExample" class="btn-audio" title="Ouvir pronúncia padrão em inglês">
+          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          Ouvir Exemplo
+        </button>
+        <button id="btnListenSlow" class="btn-audio" title="Ouvir pronúncia mais devagar">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+          Devagar (0.7x)
+        </button>
+      </div>
+
+      <!-- Result and Word Correction Box -->
+      <div class="result-box hidden" id="resultBox">
+        <div class="result-header">
+          <div class="result-status-text" id="resultStatusText">
+            <span id="resultIcon">❌</span>
+            <span id="resultTitle">Tente novamente</span>
+          </div>
+          <div class="result-score" id="resultScore">Precisão do reconhecimento: 0%</div>
+        </div>
+
+        <div>
+          <div class="transcript-label">Você falou:</div>
+          <div class="transcript-spoken" id="userTranscript">...</div>
+        </div>
+
+        <div>
+          <div class="transcript-label">Frase correta:</div>
+          <div class="diff-target" id="diffCorrection">...</div>
+        </div>
+      </div>
+
+      <!-- Anti-Frustration Rescue Trigger -->
+      <div class="anti-frustration-box hidden" id="antiFrustrationBox">
+        <span class="anti-frustration-text">Parece que o microfone não entendeu bem. Você pode avançar se tiver falado certo:</span>
+        <button id="btnForcePass" class="btn-skip-force">
+          <span>✓</span> Eu falei certo, avançar
+        </button>
+      </div>
+    </section>
+
+    <!-- Navigation actions -->
+    <div class="nav-phrase-actions">
+      <button id="btnPrevPhrase" class="btn-nav">‹ Anterior</button>
+      <button id="btnNextPhrase" class="btn-nav">Próxima ›</button>
+    </div>
+
+  </main>
+
+  <!-- Bottom Microphone Controller (Fixed Center) -->
+  <footer class="bottom-controls">
+    <div class="mic-status-label" id="micStatusLabel">Toque no microfone para começar</div>
+    
+    <div class="mic-wrapper" id="micWrapper">
+      <div class="mic-pulse-ring"></div>
+      <button class="mic-button" id="btnMic" aria-label="Ativar microfone para falar">
+        <svg viewBox="0 0 24 24" id="micIcon">
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+        </svg>
+      </button>
+    </div>
+  </footer>
+
+  <!-- Drawer Modal: Priority Review List -->
+  <div class="modal-overlay" id="reviewModal" aria-hidden="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h2 class="modal-title">Revisão Prioritária</h2>
+        <button class="icon-btn" id="btnCloseReview" aria-label="Fechar">✕</button>
+      </div>
+      <div class="modal-body" id="reviewListContent">
+        <!-- Injected by JavaScript -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Drawer Modal: Settings & Instructions -->
+  <div class="modal-overlay" id="settingsModal" aria-hidden="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h2 class="modal-title">Como Funciona</h2>
+        <button class="icon-btn" id="btnCloseSettings" aria-label="Fechar">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="help-card">
+          <h4>Fluxo automático</h4>
+          <p>1. O app fala a frase em português.</p>
+          <p>2. Assim que ele termina de falar, o microfone abre para você responder em inglês.</p>
+          <p>3. Se acertar com 85% ou mais de precisão, ele toca a pronúncia correta e pula sozinho após 1,5 segundo.</p>
+        </div>
+
+        <div class="help-card">
+          <h4>Repetição Espaçada</h4>
+          <p>Frases acertadas voltam em 3 dias, depois 7 e 15 dias. Frases com erro voltam logo no dia seguinte.</p>
+        </div>
+
+        <div class="help-card">
+          <h4>Dicas de Microfone</h4>
+          <p>Se o navegador pedir permissão, clique em Permitir. No celular Android ou computador, use preferencialmente o Google Chrome.</p>
+        </div>
+
+        <button id="btnResetProgress" class="btn-skip-force" style="background: rgba(244, 63, 94, 0.2); border-color: rgba(244, 63, 94, 0.4); color: #fb7185;">
+          Zerar todo o histórico de progresso
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
