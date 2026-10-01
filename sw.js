@@ -1,4 +1,4 @@
-const CACHE_NAME = 'voice-trainer-v1';
+const CACHE_NAME = 'voice-trainer-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -6,10 +6,10 @@ const ASSETS = [
   './app.js',
   './phrases.json',
   './manifest.json',
-  './public/icon-192.png',
-  './public/icon-512.png',
-  './public/icon-maskable.png',
-  './public/apple-touch-icon.png'
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable.png',
+  './icons/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {

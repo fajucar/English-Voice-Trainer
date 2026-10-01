@@ -1,0 +1,17 @@
+{
+  "name": "english-voice-trainer",
+  "version": "1.0.0",
+  "description": "English Voice Trainer - PWA Mobile First",
+  "scripts": {
+    "dev": "npx serve . -l 3000",
+    "start": "npx serve . -l 3000"
+  },
+  "keywords": [
+    "pwa",
+    "english",
+    "voice-trainer",
+    "speech-recognition"
+  ],
+  "author": "",
+  "license": "MIT"
+}
