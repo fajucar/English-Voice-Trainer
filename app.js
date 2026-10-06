@@ -1,886 +1,736 @@
 /**
  * English Voice Trainer
- * PWA Vanilla JS - Treino de fala inteligente
+ * Tutor de inglês por voz: o tutor fala, você grava, o Gemini avalia o som.
  */
+'use strict';
 
-// Estado da Aplicação
-const state = {
-  allPhrases: [],
-  filteredPhrases: [],
-  currentIndex: 0,
-  currentCategory: 'all',
-  currentPhraseAttempts: 0,
-  isListening: false,
-  isSpeaking: false,
-  recognition: null,
-  speechTimeout: null,
-  voices: {
-    pt: null,
-    en: null
+/* ================= Cenários ================= */
+const SCENARIOS = [
+  {
+    id: 'starbucks',
+    emoji: '☕',
+    nome: 'Starbucks',
+    descricao: 'Pedir seu café do seu jeito',
+    personagem: 'Barista',
+    contexto: 'Starbucks em Nova York, de manhã. O aluno é o cliente pedindo café e algo para comer; o personagem é um barista simpático e rápido. Etapas típicas: pedir a bebida, tamanho, leite/extras, nome para o copo, algo para comer, pagar, agradecer.',
+    abertura: {
+      cena: 'Você entra no Starbucks numa manhã fria em Nova York. A fila anda e chega a sua vez. O barista sorri:',
+      falaPersonagem: 'Hi! What can I get for you?',
+      frase: 'Can I have a latte, please?',
+      traducao: 'Pode me ver um latte, por favor?',
+      chunk: 'Can I have a + [item], please?'
+    }
+  },
+  {
+    id: 'hotel',
+    emoji: '🏨',
+    nome: 'Hotel',
+    descricao: 'Fazer check-in e pedir o que precisa',
+    personagem: 'Recepcionista',
+    contexto: 'Recepção de um hotel em Miami, à noite. O aluno acabou de chegar de viagem e faz o check-in; o personagem é a recepcionista. Etapas típicas: dizer que tem reserva, mostrar documento, perguntar sobre café da manhã, wi-fi, horário de check-out, pedir ajuda com a mala, agradecer.',
+    abertura: {
+      cena: 'Você chega no hotel em Miami depois de um voo longo, puxando a mala até a recepção. A recepcionista diz:',
+      falaPersonagem: 'Good evening! Welcome. How can I help you?',
+      frase: 'Hi, I have a reservation for tonight.',
+      traducao: 'Oi, eu tenho uma reserva para hoje à noite.',
+      chunk: 'I have a reservation for + [quando]'
+    }
+  },
+  {
+    id: 'imigracao',
+    emoji: '🛂',
+    nome: 'Imigração',
+    descricao: 'Passar pelo oficial no aeroporto',
+    personagem: 'Oficial',
+    contexto: 'Fila da imigração no aeroporto de Orlando. O aluno é um turista brasileiro; o personagem é um oficial sério mas educado. Etapas típicas: motivo da viagem, quanto tempo vai ficar, onde vai se hospedar, com quem está viajando, profissão, passagem de volta, despedida.',
+    abertura: {
+      cena: 'Você desce do avião em Orlando e chega na fila da imigração. O oficial pega seu passaporte e pergunta:',
+      falaPersonagem: "What's the purpose of your visit?",
+      frase: "I'm here on vacation.",
+      traducao: 'Estou aqui de férias.',
+      chunk: "I'm here on + [motivo]"
+    }
+  },
+  {
+    id: 'reuniao',
+    emoji: '💼',
+    nome: 'Reunião',
+    descricao: 'Se apresentar e participar de uma call',
+    personagem: 'Gerente',
+    contexto: 'Primeira reunião online com o time dos EUA. O aluno é o novo membro do time; o personagem é a gerente, simpática. Etapas típicas: se apresentar, dizer o que faz, pedir para repetir, concordar, dar uma atualização curta, combinar o próximo passo, se despedir.',
+    abertura: {
+      cena: 'Primeira reunião online com o time dos EUA. Todo mundo liga a câmera e a gerente diz:',
+      falaPersonagem: "Hi everyone! Let's start with quick introductions.",
+      frase: 'Hi everyone, nice to meet you all.',
+      traducao: 'Oi pessoal, prazer conhecer vocês.',
+      chunk: 'Nice to meet + [quem]'
+    }
   }
+];
+
+const STORAGE_KEY = 'evt_historico_v1';
+const MAX_REC_MS = 15000;
+const MIN_REC_MS = 600;
+
+/* ================= Estado ================= */
+const state = {
+  scenario: null,
+  turn: null,          // { frase, traducao, chunk, falaPersonagem }
+  targetEl: null,
+  historico: [],       // [{ personagem, frase }] enviado ao Gemini como contexto
+  turno: 1,
+  tentativasFrase: 0,
+  session: null,
+  rec: null,
+  busy: false,
+  ultimaFala: false,   // o Gemini avisou que esta é a fala de despedida
+  ended: false,
+  myAudioUrl: null
 };
 
-// Mapeamentos para Normalização Inteligente
-const CONTRACTIONS_MAP = {
-  "i'm": "i am",
-  "im": "i am",
-  "you're": "you are",
-  "youre": "you are",
-  "he's": "he is",
-  "hes": "he is",
-  "she's": "she is",
-  "shes": "she is",
-  "it's": "it is",
-  "its": "it is",
-  "we're": "we are",
-  "were": "we are",
-  "they're": "they are",
-  "theyre": "they are",
-  "i've": "i have",
-  "ive": "i have",
-  "you've": "you have",
-  "we've": "we have",
-  "they've": "they have",
-  "i'll": "i will",
-  "ill": "i will",
-  "you'll": "you will",
-  "he'll": "he will",
-  "she'll": "she will",
-  "we'll": "we will",
-  "they'll": "they will",
-  "i'd": "i would",
-  "you'd": "you would",
-  "he'd": "he would",
-  "she'd": "she would",
-  "we'd": "we would",
-  "they'd": "they would",
-  "can't": "cannot",
-  "cant": "cannot",
-  "don't": "do not",
-  "dont": "do not",
-  "doesn't": "does not",
-  "doesnt": "does not",
-  "didn't": "did not",
-  "didnt": "did not",
-  "won't": "will not",
-  "wont": "will not",
-  "isn't": "is not",
-  "isnt": "is not",
-  "aren't": "are not",
-  "arent": "are not",
-  "wasn't": "was not",
-  "wasnt": "was not",
-  "weren't": "were not",
-  "werent": "were not",
-  "haven't": "have not",
-  "havent": "have not",
-  "hasn't": "has not",
-  "hasnt": "has not",
-  "hadn't": "had not",
-  "hadnt": "had not",
-  "wouldn't": "would not",
-  "couldn't": "could not",
-  "shouldn't": "should not",
-  "let's": "let us",
-  "lets": "let us",
-  "that's": "that is",
-  "thats": "that is",
-  "what's": "what is",
-  "whats": "what is",
-  "where's": "where is",
-  "wheres": "where is",
-  "how's": "how is",
-  "hows": "how is",
-  "there's": "there is",
-  "theres": "there is"
-};
+const $ = (id) => document.getElementById(id);
 
-const NUMBERS_MAP = {
-  "0": "zero",
-  "1": "one",
-  "2": "two",
-  "3": "three",
-  "4": "four",
-  "5": "five",
-  "6": "six",
-  "7": "seven",
-  "8": "eight",
-  "9": "nine",
-  "10": "ten",
-  "11": "eleven",
-  "12": "twelve",
-  "13": "thirteen",
-  "14": "fourteen",
-  "15": "fifteen",
-  "16": "sixteen",
-  "17": "seventeen",
-  "18": "eighteen",
-  "19": "nineteen",
-  "20": "twenty",
-  "30": "thirty",
-  "40": "forty",
-  "50": "fifty"
-};
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
 
-// Elementos do DOM
-const dom = {
-  streakCount: document.getElementById('streakCount'),
-  todayCount: document.getElementById('todayCount'),
-  categoriesBar: document.getElementById('categoriesBar'),
-  phraseCounter: document.getElementById('phraseCounter'),
-  phraseAttemptIndicator: document.getElementById('phraseAttemptIndicator'),
-  progressBarFill: document.getElementById('progressBarFill'),
-  statusAlert: document.getElementById('statusAlert'),
-  badgeCategory: document.getElementById('badgeCategory'),
-  srsIntervalText: document.getElementById('srsIntervalText'),
-  phrasePt: document.getElementById('phrasePt'),
-  btnSpeakPt: document.getElementById('btnSpeakPt'),
-  btnListenExample: document.getElementById('btnListenExample'),
-  btnListenSlow: document.getElementById('btnListenSlow'),
-  resultBox: document.getElementById('resultBox'),
-  resultIcon: document.getElementById('resultIcon'),
-  resultTitle: document.getElementById('resultTitle'),
-  resultScore: document.getElementById('resultScore'),
-  userTranscript: document.getElementById('userTranscript'),
-  diffCorrection: document.getElementById('diffCorrection'),
-  antiFrustrationBox: document.getElementById('antiFrustrationBox'),
-  btnForcePass: document.getElementById('btnForcePass'),
-  btnPrevPhrase: document.getElementById('btnPrevPhrase'),
-  btnNextPhrase: document.getElementById('btnNextPhrase'),
-  btnMic: document.getElementById('btnMic'),
-  micWrapper: document.getElementById('micWrapper'),
-  micStatusLabel: document.getElementById('micStatusLabel'),
-  reviewModal: document.getElementById('reviewModal'),
-  reviewListContent: document.getElementById('reviewListContent'),
-  btnOpenReview: document.getElementById('btnOpenReview'),
-  btnCloseReview: document.getElementById('btnCloseReview'),
-  settingsModal: document.getElementById('settingsModal'),
-  btnOpenSettings: document.getElementById('btnOpenSettings'),
-  btnCloseSettings: document.getElementById('btnCloseSettings'),
-  btnResetProgress: document.getElementById('btnResetProgress')
-};
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Inicialização Principal
-document.addEventListener('DOMContentLoaded', async () => {
-  initServiceWorker();
-  initSpeechSynthesis();
-  initSpeechRecognition();
-  loadStreakAndStats();
-  await loadPhrases();
-  bindEvents();
+/* ================= Navegação ================= */
+function show(name) {
+  ['home', 'chat', 'history'].forEach((s) => { $('screen-' + s).hidden = s !== name; });
+  window.scrollTo(0, 0);
+}
+
+function renderHome() {
+  const list = $('scenarioList');
+  list.innerHTML = '';
+  SCENARIOS.forEach((sc) => {
+    const btn = document.createElement('button');
+    btn.className = 'scenario-card';
+    btn.type = 'button';
+    btn.innerHTML = `
+      <span class="scenario-emoji">${sc.emoji}</span>
+      <span>
+        <div class="scenario-name">${esc(sc.nome)}</div>
+        <div class="scenario-desc">${esc(sc.descricao)}</div>
+      </span>`;
+    btn.addEventListener('click', () => startScenario(sc));
+    list.appendChild(btn);
+  });
+
+  const avisos = [];
+  if (!window.isSecureContext) avisos.push('O microfone só funciona em HTTPS. Abra pelo link da Vercel (https://…).');
+  if (!navigator.mediaDevices || !window.MediaRecorder) avisos.push('Este navegador não grava áudio. Use o Chrome (Android) ou Safari atualizado (iPhone).');
+  if (!('speechSynthesis' in window)) avisos.push('Este navegador não tem voz em inglês. Você vai ver as frases, mas não vai ouvir.');
+  $('envWarning').hidden = !avisos.length;
+  $('envWarning').innerHTML = avisos.map(esc).join('<br>');
+}
+
+/* ================= Voz do tutor (speechSynthesis) ================= */
+let voices = [];
+function loadVoices() {
+  if ('speechSynthesis' in window) voices = speechSynthesis.getVoices();
+}
+if ('speechSynthesis' in window) {
+  loadVoices();
+  speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+function pickVoice() {
+  const us = voices.filter((v) => /^en[-_]US/i.test(v.lang));
+  return us.find((v) => /Google|Samantha|Aria|Jenny|Ava|Allison/i.test(v.name))
+    || us[0]
+    || voices.find((v) => /^en/i.test(v.lang))
+    || null;
+}
+
+function speak(text, { rate = 0.9, pitch = 1 } = {}) {
+  return new Promise((resolve) => {
+    if (!text || !('speechSynthesis' in window)) return resolve();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US';
+    const v = pickVoice();
+    if (v) u.voice = v;
+    u.rate = rate;
+    u.pitch = pitch;
+    // Alguns Androids não disparam onend: garante que a Promise termina.
+    const safety = setTimeout(resolve, 1500 + text.length * 150 / rate);
+    u.onend = u.onerror = () => { clearTimeout(safety); resolve(); };
+    speechSynthesis.speak(u);
+  });
+}
+
+function stopSpeaking() {
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+}
+
+async function speakTurn({ withCharacter = true, slow = false } = {}) {
+  stopSpeaking();
+  const t = state.turn;
+  if (!t) return;
+  if (withCharacter && t.falaPersonagem) {
+    await speak(t.falaPersonagem, { rate: 0.95, pitch: 1.15 });
+    await wait(350);
+  }
+  if (state.turn === t) await speak(t.frase, { rate: slow ? 0.65 : 0.9 });
+}
+
+/* ================= Conversa ================= */
+function startScenario(sc) {
+  cleanupRecording();
+  stopSpeaking();
+  state.scenario = sc;
+  state.turn = null;
+  state.targetEl = null;
+  state.historico = [];
+  state.turno = 1;
+  state.tentativasFrase = 0;
+  state.ultimaFala = false;
+  state.ended = false;
+  state.session = {
+    id: Date.now().toString(36),
+    cenario: sc.id,
+    inicio: Date.now(),
+    tentativas: 0,
+    acertos: 0,
+    falas: 0,
+    palavras: [],
+    concluida: false
+  };
+  setMyAudio(null);
+  $('thread').innerHTML = '';
+  $('chatEmoji').textContent = sc.emoji;
+  $('chatName').textContent = sc.nome;
+  updateScore();
+  setHint('Ouça e toque no microfone para repetir');
+  setMicState('idle');
+  show('chat');
+  presentTurn(sc.abertura);
+}
+
+function addBubble(cls, html) {
+  const el = document.createElement('div');
+  el.className = 'bubble ' + cls;
+  el.innerHTML = html;
+  $('thread').appendChild(el);
+  scrollToBottom();
+  return el;
+}
+
+function scrollToBottom() {
+  requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+}
+
+function presentTurn(t) {
+  if (t.cena) addBubble('scene', esc(t.cena));
+  if (t.falaPersonagem) {
+    addBubble('character', `<div class="speaker">${esc(state.scenario.personagem)}</div><div class="en">${esc(t.falaPersonagem)}</div>`);
+  }
+  state.turn = {
+    frase: t.frase,
+    traducao: t.traducao,
+    chunk: t.chunk,
+    falaPersonagem: t.falaPersonagem || ''
+  };
+  state.tentativasFrase = 0;
+  state.targetEl = null;
+  renderTarget([]);
+  speakTurn();
+}
+
+function normalizeWord(w) {
+  return String(w).toLowerCase().replace(/[^a-z0-9']/g, '');
+}
+
+// Destaca o chunk (parte fixa) e sublinha as palavras erradas dentro da frase.
+function highlightPhrase(frase, chunk, badWords) {
+  const fixed = String(chunk || '').split(/[+[]/)[0].trim().replace(/[.,!?]+$/, '');
+  const start = fixed.length > 1 ? frase.toLowerCase().indexOf(fixed.toLowerCase()) : -1;
+  const end = start >= 0 ? start + fixed.length : -1;
+
+  const bad = new Set();
+  (badWords || []).forEach((b) => String(b).split(/\s+/).forEach((w) => { const n = normalizeWord(w); if (n) bad.add(n); }));
+
+  let html = '';
+  let pos = 0;
+  let inMark = false;
+  frase.split(/(\s+)/).forEach((tok) => {
+    const tokStart = pos;
+    pos += tok.length;
+    const isSpace = /^\s+$/.test(tok);
+    const insideChunk = start >= 0 && tokStart >= start && pos <= end;
+
+    if (insideChunk && !inMark && !isSpace) { html += '<mark>'; inMark = true; }
+    if (!insideChunk && inMark) { html += '</mark>'; inMark = false; }
+
+    if (!isSpace && bad.has(normalizeWord(tok))) {
+      html += `<span class="bad">${esc(tok)}</span>`;
+    } else {
+      html += esc(tok);
+    }
+  });
+  if (inMark) html += '</mark>';
+  return html;
+}
+
+function renderChunk(chunk) {
+  return esc(chunk).replace(/\[([^\]]+)\]/g, '<span class="slot">[$1]</span>');
+}
+
+function renderTarget(badWords) {
+  const t = state.turn;
+  const el = state.targetEl || document.createElement('div');
+  el.className = 'target';
+  el.innerHTML = `
+    <div class="target-label">Sua vez de falar</div>
+    <div class="target-en">${highlightPhrase(t.frase, t.chunk, badWords)}</div>
+    <div class="target-pt">${esc(t.traducao)}</div>
+    ${t.chunk ? `<div class="chunk">🧩 ${renderChunk(t.chunk)}</div>` : ''}`;
+  if (!state.targetEl) {
+    $('thread').appendChild(el);
+    state.targetEl = el;
+  }
+  scrollToBottom();
+}
+
+function updateScore() {
+  const s = state.session;
+  $('scoreOk').textContent = s ? s.acertos : 0;
+  $('scoreTotal').textContent = s ? s.tentativas : 0;
+}
+
+function setHint(text) {
+  $('micHint').textContent = text;
+}
+
+function setMicState(mode) {
+  const btn = $('btnMic');
+  btn.classList.toggle('recording', mode === 'recording');
+  btn.classList.toggle('busy', mode === 'busy');
+  btn.disabled = mode === 'busy' || state.ended;
+  btn.setAttribute('aria-label', mode === 'recording' ? 'Parar gravação' : 'Gravar');
+  ['btnListen', 'btnSlow', 'btnSkip'].forEach((id) => { $(id).disabled = mode !== 'idle' || state.ended; });
+}
+
+function formatMacete(m) {
+  return esc(m).replace(/^([^:]{2,40}):/, '<strong>$1:</strong>');
+}
+
+function handleResult(r, { pulou = false } = {}) {
+  const s = state.session;
+
+  if (!pulou) {
+    s.tentativas++;
+    state.tentativasFrase++;
+    if (r.transcricao) addBubble('me', `🗣️ “${esc(r.transcricao)}”`);
+  }
+
+  if (r.acertou) {
+    if (!pulou) {
+      s.acertos++;
+      addBubble('feedback-ok', `✅ ${esc(r.feedback || 'Mandou bem!')}${r.macete ? `<div class="trick">${formatMacete(r.macete)}</div>` : ''}`);
+    }
+    s.falas++;
+    state.historico.push({ personagem: state.turn.falaPersonagem, frase: state.turn.frase });
+    state.turno++;
+    if (state.targetEl) state.targetEl.classList.add('done');
+    state.targetEl = null;
+
+    if (state.ultimaFala || !r.proximaFala) {
+      if (!state.ultimaFala && r.cena) addBubble('scene', esc(r.cena));
+      endScene();
+    } else {
+      state.ultimaFala = r.fimDaCena === true;
+      presentTurn({
+        cena: r.cena,
+        falaPersonagem: r.falaPersonagem,
+        frase: r.proximaFala,
+        traducao: r.traducao,
+        chunk: r.chunk
+      });
+    }
+  } else {
+    const palavras = r.palavrasErradas || [];
+    s.palavras.push(...palavras);
+    const chips = palavras.length
+      ? `<div class="wrong-words">${palavras.map((p) => `<span class="wrong-word">${esc(p)}</span>`).join('')}</div>`
+      : '';
+    addBubble('feedback-err', `
+      <div>🔁 ${esc(r.feedback || 'Quase! Bora de novo.')}</div>
+      ${chips}
+      ${r.macete ? `<div class="trick">💡 ${formatMacete(r.macete)}</div>` : ''}
+      <div class="repeat-hint">Repita a frase 👇</div>`);
+
+    // Move o cartão da frase para baixo do feedback, com as palavras marcadas.
+    if (state.targetEl) $('thread').appendChild(state.targetEl);
+    renderTarget(palavras);
+    setHint(state.tentativasFrase >= 3 ? 'Travou? Tudo bem, pode pular ⏭' : 'Ouça de novo e repita');
+    wait(600).then(() => { if (!state.rec) speakTurn({ withCharacter: false, slow: true }); });
+  }
+
+  updateScore();
+  saveSession();
+}
+
+function endScene() {
+  state.ended = true;
+  state.turn = null;
+  state.session.concluida = true;
+  saveSession();
+  stopSpeaking();
+
+  const s = state.session;
+  const card = document.createElement('div');
+  card.className = 'end-card';
+  card.innerHTML = `
+    <h2>🎉 Cena concluída!</h2>
+    <div>Você acertou ${s.acertos} de ${s.tentativas} tentativas.</div>
+    <div class="end-actions">
+      <button class="btn primary" type="button" data-act="again">Repetir cena</button>
+      <button class="btn" type="button" data-act="home">Outras cenas</button>
+    </div>`;
+  card.querySelector('[data-act="again"]').addEventListener('click', () => startScenario(state.scenario));
+  card.querySelector('[data-act="home"]').addEventListener('click', goHome);
+  $('thread').appendChild(card);
+  setMicState('idle');
+  setHint('Cena concluída');
+  scrollToBottom();
+  speak('Great job!');
+}
+
+function goHome() {
+  cleanupRecording();
+  stopSpeaking();
+  state.turn = null;
+  show('home');
+}
+
+/* ================= Gravação (MediaRecorder) ================= */
+function pickMime() {
+  const options = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/aac'];
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+  return options.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+}
+
+async function toggleMic() {
+  if (state.busy || state.ended) return;
+  if (state.rec) return stopRecording();
+  return startRecording();
+}
+
+async function startRecording() {
+  stopSpeaking();
+  if (!window.isSecureContext) return addBubble('error', '⚠️ O microfone só funciona em HTTPS.');
+  if (!navigator.mediaDevices || !window.MediaRecorder) return addBubble('error', '⚠️ Este navegador não consegue gravar áudio.');
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  } catch (err) {
+    const negado = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+    addBubble('error', negado
+      ? '⚠️ Permissão do microfone negada. Libere nas configurações do navegador para este site.'
+      : '⚠️ Não consegui acessar o microfone.');
+    return;
+  }
+
+  const mime = pickMime();
+  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const rec = { recorder, stream, chunks: [], start: Date.now(), mime, timer: null, ticker: null };
+
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size) rec.chunks.push(e.data); };
+  recorder.onstop = () => {
+    stream.getTracks().forEach((tr) => tr.stop());
+    if (!rec.cancelled) processRecording(rec);
+  };
+
+  recorder.start();
+  state.rec = rec;
+  setMicState('recording');
+  const tick = () => {
+    const secs = Math.floor((Date.now() - rec.start) / 1000);
+    setHint(`Gravando… ${secs}s · toque para parar`);
+  };
+  tick();
+  rec.ticker = setInterval(tick, 500);
+  rec.timer = setTimeout(stopRecording, MAX_REC_MS);
+}
+
+function stopRecording() {
+  const rec = state.rec;
+  if (!rec) return;
+  state.rec = null;
+  clearInterval(rec.ticker);
+  clearTimeout(rec.timer);
+  rec.duration = Date.now() - rec.start;
+  if (rec.recorder.state !== 'inactive') rec.recorder.stop();
+}
+
+function cleanupRecording() {
+  const rec = state.rec;
+  if (!rec) return;
+  rec.cancelled = true;
+  stopRecording();
+  rec.stream.getTracks().forEach((tr) => tr.stop());
+  setMicState('idle');
+}
+
+function setMyAudio(blob) {
+  if (state.myAudioUrl) URL.revokeObjectURL(state.myAudioUrl);
+  state.myAudioUrl = blob ? URL.createObjectURL(blob) : null;
+  $('btnMine').disabled = !blob;
+}
+
+async function processRecording(rec) {
+  const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || rec.mime || 'audio/webm' });
+  if (rec.duration < MIN_REC_MS || !blob.size) {
+    setMicState('idle');
+    setHint('Muito curto. Segure a frase inteira e toque para parar.');
+    return;
+  }
+  setMyAudio(blob);
+  await sendToTutor(blob);
+}
+
+async function sendToTutor(blob) {
+  state.busy = true;
+  setMicState('busy');
+  setHint('Ouvindo sua pronúncia…');
+  try {
+    const { data, mimeType } = await prepareAudio(blob);
+    const r = await callTutor({ audio: data, mimeType });
+    handleResult(r);
+  } catch (err) {
+    addBubble('error', '⚠️ ' + esc(err.message || 'Algo deu errado. Tente de novo.'));
+    setHint('Toque para tentar de novo');
+  } finally {
+    state.busy = false;
+    if (!state.ended) setMicState('idle');
+    if (!state.ended && /Ouvindo/.test($('micHint').textContent)) setHint('Toque para gravar');
+  }
+}
+
+async function skipPhrase() {
+  if (state.busy || state.rec || state.ended || !state.turn) return;
+  stopSpeaking();
+  state.busy = true;
+  setMicState('busy');
+  setHint('Avançando a cena…');
+  try {
+    const r = await callTutor({ pular: true });
+    addBubble('me', '⏭ Frase pulada');
+    handleResult(r, { pulou: true });
+  } catch (err) {
+    addBubble('error', '⚠️ ' + esc(err.message || 'Não consegui pular agora.'));
+  } finally {
+    state.busy = false;
+    if (!state.ended) {
+      setMicState('idle');
+      setHint('Toque para gravar');
+    }
+  }
+}
+
+async function callTutor(extra) {
+  const t = state.turn;
+  let resp;
+  try {
+    resp = await fetch('/api/tutor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cenario: state.scenario.contexto,
+        fraseEsperada: t.frase,
+        traducao: t.traducao,
+        chunk: t.chunk,
+        historico: state.historico.slice(-8),
+        turno: state.turno,
+        ...extra
+      })
+    });
+  } catch {
+    throw new Error('Sem internet. Conecte e tente de novo.');
+  }
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok || !json) throw new Error((json && json.erro) || `Erro no servidor (${resp.status}).`);
+  return json;
+}
+
+/* ===== Conversão para WAV 16 kHz mono (formato que o Gemini aceita em qualquer celular) ===== */
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function prepareAudio(blob) {
+  let samples;
+  const rate = 16000;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    const arr = await blob.arrayBuffer();
+    const decoded = await new Promise((res, rej) => ctx.decodeAudioData(arr, res, rej));
+    ctx.close && ctx.close();
+
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new OAC(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start(0);
+    const rendered = await off.startRendering();
+    samples = rendered.getChannelData(0);
+  } catch {
+    // Se o navegador não conseguir converter, manda o áudio original.
+    return { data: await blobToBase64(blob), mimeType: (blob.type || 'audio/webm').split(';')[0] };
+  }
+
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const a = Math.abs(samples[i]);
+    if (a > peak) peak = a;
+  }
+  if (peak < 0.01) throw new Error('Não ouvi nada. Confira se o microfone está liberado e fale mais perto.');
+
+  // Normaliza o volume para o Gemini ouvir melhor vozes baixas.
+  const gain = Math.min(4, 0.9 / peak);
+  if (gain > 1.05) for (let i = 0; i < samples.length; i++) samples[i] *= gain;
+
+  return { data: await blobToBase64(encodeWav(samples, rate)), mimeType: 'audio/wav' };
+}
+
+/* ================= Histórico (localStorage) ================= */
+function loadHistory() {
+  try {
+    const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSession() {
+  const s = state.session;
+  if (!s || (!s.tentativas && !s.falas)) return;
+  s.fim = Date.now();
+  const list = loadHistory().filter((x) => x.id !== s.id);
+  list.unshift({ ...s });
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, 60)));
+  } catch { /* armazenamento cheio ou bloqueado: segue sem salvar */ }
+}
+
+function renderHistory() {
+  const list = loadHistory();
+  const ul = $('historyList');
+  const summary = $('historySummary');
+  ul.innerHTML = '';
+
+  const tentativas = list.reduce((n, s) => n + (s.tentativas || 0), 0);
+  const acertos = list.reduce((n, s) => n + (s.acertos || 0), 0);
+  const taxa = tentativas ? Math.round((acertos / tentativas) * 100) : 0;
+  summary.innerHTML = `
+    <div class="stat"><b>${list.length}</b><span>cenas</span></div>
+    <div class="stat"><b>${acertos}</b><span>frases certas</span></div>
+    <div class="stat"><b>${taxa}%</b><span>de acerto</span></div>`;
+
+  if (!list.length) {
+    ul.innerHTML = '<li class="empty">Nenhum treino ainda. Bora para a primeira cena!</li>';
+    return;
+  }
+
+  // Palavras que mais travaram, somando todos os treinos.
+  const freq = {};
+  list.forEach((s) => (s.palavras || []).forEach((p) => {
+    const k = String(p).toLowerCase();
+    freq[k] = (freq[k] || 0) + 1;
+  }));
+  const top = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  if (top.length) {
+    const li = document.createElement('li');
+    li.className = 'history-item';
+    li.innerHTML = `
+      <div class="history-head">🎯 Palavras para treinar</div>
+      <div class="history-words">${top.map(([w, n]) => `<span>${esc(w)} ×${n}</span>`).join('')}</div>`;
+    ul.appendChild(li);
+  }
+
+  list.forEach((s) => {
+    const sc = SCENARIOS.find((x) => x.id === s.cenario) || { emoji: '🗣️', nome: s.cenario };
+    const data = new Date(s.inicio).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const palavras = [...new Set((s.palavras || []).map((p) => String(p).toLowerCase()))].slice(0, 8);
+    const li = document.createElement('li');
+    li.className = 'history-item';
+    li.innerHTML = `
+      <div class="history-head">
+        <span>${sc.emoji} ${esc(sc.nome)} ${s.concluida ? '✅' : ''}</span>
+        <span class="history-date">${esc(data)}</span>
+      </div>
+      <div class="history-meta">${s.acertos || 0} acertos em ${s.tentativas || 0} tentativas · ${s.falas || 0} falas</div>
+      ${palavras.length ? `<div class="history-words">${palavras.map((p) => `<span>${esc(p)}</span>`).join('')}</div>` : ''}`;
+    ul.appendChild(li);
+  });
+}
+
+/* ================= Eventos ================= */
+$('btnMic').addEventListener('click', toggleMic);
+$('btnListen').addEventListener('click', () => speakTurn());
+$('btnSlow').addEventListener('click', () => speakTurn({ withCharacter: false, slow: true }));
+$('btnSkip').addEventListener('click', skipPhrase);
+$('btnMine').addEventListener('click', () => {
+  if (!state.myAudioUrl) return;
+  stopSpeaking();
+  new Audio(state.myAudioUrl).play().catch(() => {});
+});
+$('btnBack').addEventListener('click', goHome);
+$('btnHistory').addEventListener('click', () => { renderHistory(); show('history'); });
+$('btnHistoryBack').addEventListener('click', () => show('home'));
+$('btnClearHistory').addEventListener('click', () => {
+  if (!loadHistory().length) return;
+  if (confirm('Apagar todo o histórico?')) {
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignora */ }
+    renderHistory();
+  }
 });
 
-// PWA Service Worker
-function initServiceWorker() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js')
-      .catch((err) => console.log('Service Worker não registrado:', err));
-  }
-}
-
-// Carregamento de Frases
-async function loadPhrases() {
-  try {
-    const res = await fetch('./phrases.json');
-    state.allPhrases = await res.json();
-    applyCategoryFilter(state.currentCategory);
-    restoreSavedProgress();
-  } catch (err) {
-    showAlert('Erro ao carregar lista de frases locais.', 'danger');
-  }
-}
-
-// Configuração de Vozes (SpeechSynthesis)
-function initSpeechSynthesis() {
-  if (!('speechSynthesis' in window)) return;
-
-  const updateVoices = () => {
-    const available = window.speechSynthesis.getVoices();
-    state.voices.pt = available.find(v => v.lang === 'pt-BR') || available.find(v => v.lang.startsWith('pt'));
-    state.voices.en = available.find(v => v.lang === 'en-US') || available.find(v => v.lang.startsWith('en'));
-  };
-
-  updateVoices();
-  if (window.speechSynthesis.onvoiceschanged !== undefined) {
-    window.speechSynthesis.onvoiceschanged = updateVoices;
-  }
-}
-
-// Falar texto via TTS
-function speakText(text, lang = 'en-US', rate = 1.0, onEndCallback = null) {
-  if (!('speechSynthesis' in window)) {
-    if (onEndCallback) onEndCallback();
-    return;
-  }
-
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = lang;
-  utterance.rate = rate;
-
-  if (lang.startsWith('pt') && state.voices.pt) {
-    utterance.voice = state.voices.pt;
-  } else if (lang.startsWith('en') && state.voices.en) {
-    utterance.voice = state.voices.en;
-  }
-
-  state.isSpeaking = true;
-  dom.micWrapper.classList.add('speaking');
-  dom.micStatusLabel.textContent = lang.startsWith('pt') ? 'Ouvindo exemplo em português...' : 'Pronunciando em inglês...';
-
-  utterance.onend = () => {
-    state.isSpeaking = false;
-    dom.micWrapper.classList.remove('speaking');
-    if (onEndCallback) {
-      onEndCallback();
-    }
-  };
-
-  utterance.onerror = () => {
-    state.isSpeaking = false;
-    dom.micWrapper.classList.remove('speaking');
-    if (onEndCallback) {
-      onEndCallback();
-    }
-  };
-
-  window.speechSynthesis.speak(utterance);
-}
-
-// Configuração de Reconhecimento de Voz (STT)
-function initSpeechRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
-    showAlert('Reconhecimento de voz não suportado neste navegador. Use o Google Chrome no celular ou computador.', 'warning');
-    dom.micStatusLabel.textContent = 'Navegador sem suporte a voz';
-    return;
-  }
-
-  const rec = new SpeechRecognition();
-  rec.continuous = false;
-  rec.interimResults = false;
-  rec.lang = 'en-US';
-  rec.maxAlternatives = 1;
-
-  rec.onstart = () => {
-    state.isListening = true;
-    dom.micWrapper.classList.add('listening');
-    dom.micStatusLabel.textContent = 'Pode falar em inglês agora...';
-    
-    // Timeout de 6 segundos sem captura
-    clearTimeout(state.speechTimeout);
-    state.speechTimeout = setTimeout(() => {
-      if (state.isListening) {
-        rec.stop();
-        handleNoSpeechDetected();
-      }
-    }, 6000);
-  };
-
-  rec.onresult = (event) => {
-    clearTimeout(state.speechTimeout);
-    const spokenText = event.results[0][0].transcript;
-    handleRecognitionResult(spokenText);
-  };
-
-  rec.onerror = (event) => {
-    clearTimeout(state.speechTimeout);
-    state.isListening = false;
-    dom.micWrapper.classList.remove('listening');
-
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      showAlert('Permissão do microfone negada. Toque no ícone de cadeado do navegador e permita o uso do microfone.', 'danger');
-      dom.micStatusLabel.textContent = 'Microfone bloqueado';
-    } else if (event.error === 'no-speech') {
-      handleNoSpeechDetected();
-    } else {
-      dom.micStatusLabel.textContent = 'Toque no microfone para tentar de novo';
-    }
-  };
-
-  rec.onend = () => {
-    clearTimeout(state.speechTimeout);
-    state.isListening = false;
-    dom.micWrapper.classList.remove('listening');
-  };
-
-  state.recognition = rec;
-}
-
-// Iniciar Captura de Áudio
-function startListening() {
-  if (state.isSpeaking) {
-    window.speechSynthesis.cancel();
-    state.isSpeaking = false;
-    dom.micWrapper.classList.remove('speaking');
-  }
-
-  if (!state.recognition) {
-    showAlert('Reconhecimento de voz indisponível no navegador atual.', 'warning');
-    return;
-  }
-
-  try {
-    state.recognition.start();
-  } catch (e) {
-    // Se já estiver ativo, reinicia
-    state.recognition.stop();
-  }
-}
-
-// Tratar quando não captar nada em 6 segundos
-function handleNoSpeechDetected() {
-  const current = getCurrentPhrase();
-  if (!current) return;
-
-  state.currentPhraseAttempts++;
-  dom.phraseAttemptIndicator.textContent = `Tentativa: ${state.currentPhraseAttempts}`;
-
-  dom.micStatusLabel.textContent = 'Nenhuma voz detectada. Ouça o exemplo:';
-  
-  // Mostra caixa de resultado indicando silêncio
-  dom.resultBox.className = 'result-box error';
-  dom.resultIcon.textContent = '⏱️';
-  dom.resultTitle.textContent = 'Não conseguimos te ouvir';
-  dom.resultScore.textContent = 'Precisão do reconhecimento: 0%';
-  dom.userTranscript.textContent = '(nenhum som captado em 6 segundos)';
-  
-  renderDiffHighlights(current.english, '');
-  checkAntiFrustration(current.id);
-
-  // Toca pronúncia correta para ajudar o usuário
-  speakText(current.english, 'en-US', 1.0, () => {
-    dom.micStatusLabel.textContent = 'Toque no microfone para tentar de novo';
-  });
-}
-
-// Normalização de Texto
-function normalizePhrase(text) {
-  if (!text) return '';
-  
-  let cleaned = text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, ' ')
-    .trim();
-
-  // Substituir números por extenso
-  const words = cleaned.split(/\s+/).map(w => {
-    if (NUMBERS_MAP[w]) return NUMBERS_MAP[w];
-    if (CONTRACTIONS_MAP[w]) return CONTRACTIONS_MAP[w];
-    return w;
-  });
-
-  // Re-expande se contrações geraram múltiplas palavras
-  return words.join(' ').replace(/\s+/g, ' ').trim();
-}
-
-// Cálculo de Precisão (Distância de Levenshtein Normalizada + Match de Palavras)
-function calculateAccuracy(target, spoken) {
-  const normTarget = normalizePhrase(target);
-  const normSpoken = normalizePhrase(spoken);
-
-  if (normTarget === normSpoken) return 100;
-  if (!normSpoken) return 0;
-
-  const targetWords = normTarget.split(' ');
-  const spokenWords = normSpoken.split(' ');
-
-  // Similaridade de palavras
-  let matchedWords = 0;
-  targetWords.forEach(tw => {
-    if (spokenWords.includes(tw)) matchedWords++;
-  });
-  const wordScore = (matchedWords / Math.max(targetWords.length, spokenWords.length)) * 100;
-
-  // Levenshtein character distance
-  const matrix = [];
-  const n = normTarget.length;
-  const m = normSpoken.length;
-
-  for (let i = 0; i <= n; i++) matrix[i] = [i];
-  for (let j = 0; j <= m; j++) matrix[0][j] = j;
-
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      const cost = normTarget[i - 1] === normSpoken[j - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
-      );
-    }
-  }
-
-  const levDistance = matrix[n][m];
-  const maxLen = Math.max(n, m);
-  const levScore = Math.max(0, (1 - levDistance / maxLen) * 100);
-
-  // Média ponderada (60% palavras, 40% caracteres)
-  const finalScore = Math.round(wordScore * 0.6 + levScore * 0.4);
-  return Math.min(100, Math.max(0, finalScore));
-}
-
-// Processar Resultado do Reconhecimento
-function handleRecognitionResult(spokenText) {
-  const current = getCurrentPhrase();
-  if (!current) return;
-
-  const score = calculateAccuracy(current.english, spokenText);
-  dom.userTranscript.textContent = spokenText;
-  dom.resultScore.textContent = `Precisão do reconhecimento: ${score}%`;
-
-  if (score >= 85) {
-    // ACERTO
-    handleSuccess(current, score, spokenText);
-  } else {
-    // ERRO
-    handleFailure(current, score, spokenText);
-  }
-}
-
-// Fluxo de Sucesso
-function handleSuccess(current, score, spokenText) {
-  dom.resultBox.className = 'result-box success';
-  dom.resultIcon.textContent = '🎉';
-  dom.resultTitle.textContent = 'Muito bem!';
-  renderDiffHighlights(current.english, spokenText);
-  dom.antiFrustrationBox.classList.add('hidden');
-
-  updateSrsOnSuccess(current.id);
-  incrementTodayStats();
-
-  dom.micStatusLabel.textContent = 'Excelente! Ouvindo pronúncia correta...';
-
-  // Fala pronúncia correta em inglês e avança após 1.5s
-  speakText(current.english, 'en-US', 1.0, () => {
-    dom.micStatusLabel.textContent = 'Avançando para a próxima frase...';
-    setTimeout(() => {
-      goToNextPhrase();
-    }, 1500);
-  });
-}
-
-// Fluxo de Erro
-function handleFailure(current, score, spokenText) {
-  state.currentPhraseAttempts++;
-  dom.phraseAttemptIndicator.textContent = `Tentativa: ${state.currentPhraseAttempts}`;
-
-  dom.resultBox.className = 'result-box error';
-  dom.resultIcon.textContent = '❌';
-  dom.resultTitle.textContent = 'Tente novamente';
-  renderDiffHighlights(current.english, spokenText);
-
-  updateSrsOnFailure(current.id);
-  checkAntiFrustration(current.id);
-
-  dom.micStatusLabel.textContent = 'Ouça a pronúncia correta:';
-
-  // Fala pronúncia correta em inglês, não avança
-  speakText(current.english, 'en-US', 1.0, () => {
-    dom.micStatusLabel.textContent = 'Toque no microfone para tentar de novo';
-  });
-}
-
-// Destaque Palavra por Palavra
-function renderDiffHighlights(targetPhrase, spokenText) {
-  const normSpokenWords = normalizePhrase(spokenText).split(' ');
-  const targetTokens = targetPhrase.split(' ');
-
-  const html = targetTokens.map(token => {
-    const cleanToken = normalizePhrase(token);
-    const matched = normSpokenWords.includes(cleanToken);
-    if (matched) {
-      return `<span class="word-diff-ok">${escapeHtml(token)}</span>`;
-    } else {
-      return `<span class="word-diff-bad">${escapeHtml(token)}</span>`;
-    }
-  }).join(' ');
-
-  dom.diffCorrection.innerHTML = html;
-}
-
-// Verificar Trava Anti-Frustração (3 erros na mesma frase)
-function checkAntiFrustration(phraseId) {
-  if (state.currentPhraseAttempts >= 3) {
-    dom.antiFrustrationBox.classList.remove('hidden');
-  }
-}
-
-// Pulo com a trava anti-frustração
-function handleForcePass() {
-  const current = getCurrentPhrase();
-  if (!current) return;
-
-  const srsData = getSrsData();
-  const phraseInfo = srsData[current.id] || { interval: 1, wrongCount: 0, priorityReview: true };
-  phraseInfo.priorityReview = true;
-  phraseInfo.wrongCount = (phraseInfo.wrongCount || 0) + 1;
-  phraseInfo.lastTrained = getTodayDate();
-  srsData[current.id] = phraseInfo;
-  saveSrsData(srsData);
-
-  dom.antiFrustrationBox.classList.add('hidden');
-  showAlert('Frase adicionada à sua revisão prioritária.', 'info');
-  goToNextPhrase();
-}
-
-// Repetição Espaçada Simples (SRS)
-function getSrsData() {
-  const raw = localStorage.getItem('vt_srs_data');
-  return raw ? JSON.parse(raw) : {};
-}
-
-function saveSrsData(data) {
-  localStorage.setItem('vt_srs_data', JSON.stringify(data));
-}
-
-function updateSrsOnSuccess(phraseId) {
-  const srs = getSrsData();
-  const info = srs[phraseId] || { interval: 0, wrongCount: 0 };
-  
-  // Progressão de dias: 3 -> 7 -> 15 -> 30
-  if (!info.interval || info.interval < 3) {
-    info.interval = 3;
-  } else if (info.interval === 3) {
-    info.interval = 7;
-  } else if (info.interval === 7) {
-    info.interval = 15;
-  } else {
-    info.interval = 30;
-  }
-
-  const nextDate = new Date();
-  nextDate.setDate(nextDate.getDate() + info.interval);
-  info.nextReview = nextDate.toISOString().split('T')[0];
-  info.lastTrained = getTodayDate();
-
-  srs[phraseId] = info;
-  saveSrsData(srs);
-}
-
-function updateSrsOnFailure(phraseId) {
-  const srs = getSrsData();
-  const info = srs[phraseId] || { interval: 1, wrongCount: 0 };
-  
-  info.interval = 1; // Volta amanhã
-  info.wrongCount = (info.wrongCount || 0) + 1;
-  if (info.wrongCount >= 3) {
-    info.priorityReview = true;
-  }
-
-  const nextDate = new Date();
-  nextDate.setDate(nextDate.getDate() + 1);
-  info.nextReview = nextDate.toISOString().split('T')[0];
-  info.lastTrained = getTodayDate();
-
-  srs[phraseId] = info;
-  saveSrsData(srs);
-}
-
-// Renderizar Frase Atual
-function renderCurrentPhrase() {
-  const current = getCurrentPhrase();
-  if (!current) {
-    dom.phrasePt.textContent = 'Nenhuma frase encontrada para este filtro.';
-    dom.badgeCategory.textContent = 'Concluído';
-    dom.phraseCounter.textContent = '0 de 0';
-    dom.progressBarFill.style.width = '100%';
-    dom.resultBox.classList.add('hidden');
-    dom.antiFrustrationBox.classList.add('hidden');
-    return;
-  }
-
-  state.currentPhraseAttempts = 0;
-  dom.phraseAttemptIndicator.textContent = 'Tentativa: 1';
-  dom.phrasePt.textContent = current.portuguese;
-  dom.badgeCategory.textContent = current.category;
-  
-  const total = state.filteredPhrases.length;
-  const currentNum = state.currentIndex + 1;
-  dom.phraseCounter.textContent = `Frase ${currentNum} de ${total}`;
-  dom.progressBarFill.style.width = `${(currentNum / total) * 100}%`;
-
-  // Informação SRS da frase
-  const srs = getSrsData();
-  const info = srs[current.id];
-  if (!info) {
-    dom.srsIntervalText.textContent = 'Nova';
-  } else if (info.interval) {
-    dom.srsIntervalText.textContent = `${info.interval}d`;
-  } else {
-    dom.srsIntervalText.textContent = 'Treino';
-  }
-
-  // Reset de feedbacks
-  dom.resultBox.classList.add('hidden');
-  dom.antiFrustrationBox.classList.add('hidden');
-  dom.micStatusLabel.textContent = 'Toque no microfone ou ouça em português';
-
-  saveCurrentPhraseId(current.id);
-
-  // Iniciar fluxo automático de fala em português
-  startPhraseFlow(current);
-}
-
-// Fluxo: Fala em PT -> Espera fim -> Abre mic
-function startPhraseFlow(phrase) {
-  speakText(phrase.portuguese, 'pt-BR', 1.0, () => {
-    // Só abre o microfone se reconhecimento estiver suportado
-    if (state.recognition) {
-      startListening();
-    }
-  });
-}
-
-function getCurrentPhrase() {
-  return state.filteredPhrases[state.currentIndex] || null;
-}
-
-function goToNextPhrase() {
-  if (state.currentIndex < state.filteredPhrases.length - 1) {
-    state.currentIndex++;
-  } else {
-    state.currentIndex = 0;
-  }
-  renderCurrentPhrase();
-}
-
-function goToPrevPhrase() {
-  if (state.currentIndex > 0) {
-    state.currentIndex--;
-  } else {
-    state.currentIndex = Math.max(0, state.filteredPhrases.length - 1);
-  }
-  renderCurrentPhrase();
-}
-
-// Filtro por Categoria
-function applyCategoryFilter(cat) {
-  state.currentCategory = cat;
-  
-  if (cat === 'all') {
-    state.filteredPhrases = [...state.allPhrases];
-  } else if (cat === 'srs') {
-    const srs = getSrsData();
-    const today = getTodayDate();
-    state.filteredPhrases = state.allPhrases.filter(p => {
-      const info = srs[p.id];
-      return !info || !info.nextReview || info.nextReview <= today;
-    });
-    if (state.filteredPhrases.length === 0) {
-      showAlert('Todas as frases do dia foram concluídas! Exibindo todas para prática livre.', 'info');
-      state.filteredPhrases = [...state.allPhrases];
-    }
-  } else {
-    state.filteredPhrases = state.allPhrases.filter(p => p.category.toLowerCase() === cat.toLowerCase());
-  }
-
-  state.currentIndex = 0;
-  renderCurrentPhrase();
-}
-
-// Salvar / Restaurar Progresso
-function saveCurrentPhraseId(id) {
-  localStorage.setItem('vt_current_phrase_id', id.toString());
-}
-
-function restoreSavedProgress() {
-  const savedId = parseInt(localStorage.getItem('vt_current_phrase_id') || '1', 10);
-  const foundIndex = state.filteredPhrases.findIndex(p => p.id === savedId);
-  if (foundIndex !== -1) {
-    state.currentIndex = foundIndex;
-  }
-  renderCurrentPhrase();
-}
-
-// Estatísticas e Streak Diário
-function getTodayDate() {
-  const d = new Date();
-  return d.toISOString().split('T')[0];
-}
-
-function loadStreakAndStats() {
-  const today = getTodayDate();
-  const lastActive = localStorage.getItem('vt_last_active_date');
-  let streak = parseInt(localStorage.getItem('vt_streak') || '0', 10);
-  let todayCount = 0;
-
-  if (lastActive === today) {
-    todayCount = parseInt(localStorage.getItem('vt_today_correct') || '0', 10);
-  } else {
-    // Novo dia
-    localStorage.setItem('vt_today_correct', '0');
-    if (lastActive) {
-      const lastDate = new Date(lastActive);
-      const currentDate = new Date(today);
-      const diffDays = Math.floor((currentDate - lastDate) / (1000 * 60 * 60 * 24));
-      if (diffDays > 1) {
-        streak = 0; // Perdeu a sequência de dias seguidos
-      }
-    }
-  }
-
-  dom.streakCount.textContent = streak;
-  dom.todayCount.textContent = todayCount;
-}
-
-function incrementTodayStats() {
-  const today = getTodayDate();
-  const lastActive = localStorage.getItem('vt_last_active_date');
-  let streak = parseInt(localStorage.getItem('vt_streak') || '0', 10);
-  let todayCount = parseInt(localStorage.getItem('vt_today_correct') || '0', 10);
-
-  todayCount++;
-  localStorage.setItem('vt_today_correct', todayCount.toString());
-  dom.todayCount.textContent = todayCount;
-
-  if (lastActive !== today) {
-    streak++;
-    localStorage.setItem('vt_streak', streak.toString());
-    localStorage.setItem('vt_last_active_date', today);
-    dom.streakCount.textContent = streak;
-  }
-}
-
-// Lista de Revisão Prioritária
-function renderPriorityReviewModal() {
-  const srs = getSrsData();
-  const priorityPhrases = state.allPhrases.filter(p => {
-    const info = srs[p.id];
-    return info && (info.priorityReview || (info.wrongCount && info.wrongCount >= 3));
-  });
-
-  if (priorityPhrases.length === 0) {
-    dom.reviewListContent.innerHTML = `
-      <div class="empty-state">
-        <p>🎉 Nenhuma frase na revisão prioritária no momento!</p>
-        <p style="margin-top: 6px; font-size: 0.8rem; color: var(--text-dim);">Frases com mais de 3 erros aparecerão aqui.</p>
-      </div>
-    `;
-    return;
-  }
-
-  dom.reviewListContent.innerHTML = priorityPhrases.map(p => {
-    const info = srs[p.id] || {};
-    const erros = info.wrongCount || 0;
-    return `
-      <div class="review-item" onclick="selectPhraseForReview(${p.id})">
-        <div class="review-item-pt">${escapeHtml(p.portuguese)}</div>
-        <div class="review-item-en">${escapeHtml(p.english)}</div>
-        <div class="review-item-meta">Erros registrados: ${erros} | Categoria: ${escapeHtml(p.category)}</div>
-      </div>
-    `;
-  }).join('');
-}
-
-window.selectPhraseForReview = function(id) {
-  dom.reviewModal.classList.remove('open');
-  const index = state.allPhrases.findIndex(p => p.id === id);
-  if (index !== -1) {
-    state.filteredPhrases = [...state.allPhrases];
-    state.currentIndex = index;
-    // Atualiza chips
-    document.querySelectorAll('.category-chip').forEach(c => {
-      c.classList.toggle('active', c.dataset.cat === 'all');
-    });
-    renderCurrentPhrase();
-  }
-};
-
-// Alerta do Sistema
-function showAlert(message, type = 'info') {
-  dom.statusAlert.className = `status-msg ${type}`;
-  dom.statusAlert.textContent = message;
-  dom.statusAlert.classList.remove('hidden');
-
-  setTimeout(() => {
-    dom.statusAlert.classList.add('hidden');
-  }, 4500);
-}
-
-// Sanitização HTML
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-// Bind de Eventos
-function bindEvents() {
-  // Clique no microfone
-  dom.btnMic.addEventListener('click', () => {
-    if (state.isListening) {
-      if (state.recognition) state.recognition.stop();
-    } else {
-      startListening();
-    }
-  });
-
-  // Botões de áudio
-  dom.btnSpeakPt.addEventListener('click', () => {
-    const current = getCurrentPhrase();
-    if (current) startPhraseFlow(current);
-  });
-
-  dom.btnListenExample.addEventListener('click', () => {
-    const current = getCurrentPhrase();
-    if (current) speakText(current.english, 'en-US', 1.0);
-  });
-
-  dom.btnListenSlow.addEventListener('click', () => {
-    const current = getCurrentPhrase();
-    if (current) speakText(current.english, 'en-US', 0.7);
-  });
-
-  // Trava anti-frustração
-  dom.btnForcePass.addEventListener('click', handleForcePass);
-
-  // Navegação manual
-  dom.btnNextPhrase.addEventListener('click', goToNextPhrase);
-  dom.btnPrevPhrase.addEventListener('click', goToPrevPhrase);
-
-  // Filtros de Categoria
-  dom.categoriesBar.addEventListener('click', (e) => {
-    const chip = e.target.closest('.category-chip');
-    if (!chip) return;
-    document.querySelectorAll('.category-chip').forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
-    applyCategoryFilter(chip.dataset.cat);
-  });
-
-  // Modais
-  dom.btnOpenReview.addEventListener('click', () => {
-    renderPriorityReviewModal();
-    dom.reviewModal.classList.add('open');
-  });
-
-  dom.btnCloseReview.addEventListener('click', () => {
-    dom.reviewModal.classList.remove('open');
-  });
-
-  dom.btnOpenSettings.addEventListener('click', () => {
-    dom.settingsModal.classList.add('open');
-  });
-
-  dom.btnCloseSettings.addEventListener('click', () => {
-    dom.settingsModal.classList.remove('open');
-  });
-
-  // Fechar modais ao clicar no fundo
-  [dom.reviewModal, dom.settingsModal].forEach(modal => {
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) modal.classList.remove('open');
-    });
-  });
-
-  // Zerar progresso
-  dom.btnResetProgress.addEventListener('click', () => {
-    if (confirm('Tem certeza de que deseja zerar seu progresso e histórico de repetições?')) {
-      localStorage.clear();
-      location.reload();
-    }
+renderHome();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
   });
 }

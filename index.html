@@ -2,210 +2,91 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>English Voice Trainer</title>
-  <meta name="description" content="Treine fala em inglês com frases e retorno de voz em tempo real." />
+  <meta name="description" content="Tutor de inglês por voz: converse em cenários reais e corrija sua pronúncia." />
   <meta name="theme-color" content="#090d16" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="VoiceTrainer" />
-  <link rel="manifest" href="./manifest.json" />
-  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
-  <link rel="stylesheet" href="./style.css" />
+  <meta name="apple-mobile-web-app-title" content="Voice Trainer" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
 
-  <!-- Top App Bar -->
-  <header class="app-header">
-    <div class="brand">
-      <div class="brand-icon">
-        <svg viewBox="0 0 24 24">
-          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-        </svg>
+  <!-- TELA 1: escolha de cenário -->
+  <section id="screen-home" class="screen">
+    <header class="topbar">
+      <div class="brand">
+        <img src="/icons/icon-192.png" alt="" width="32" height="32" />
+        <span>Voice Trainer</span>
       </div>
-      <span class="brand-title">Voice Trainer</span>
-    </div>
-
-    <div class="stats-badges">
-      <div class="stat-badge streak" title="Dias seguidos praticando">
-        <span>🔥</span>
-        <span id="streakCount">0</span>d
-      </div>
-      <div class="stat-badge today" title="Acertos de hoje">
-        <span>🎯</span>
-        <span id="todayCount">0</span>
-      </div>
-      <button id="btnOpenReview" class="icon-btn" title="Revisão Prioritária" aria-label="Abrir lista de revisão">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
-        </svg>
+      <button id="btnHistory" class="icon-btn" aria-label="Histórico">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9L8.8 12H6a7 7 0 1 1 2.05 4.95l-1.42 1.42A9 9 0 1 0 13 3zm-1 5v5l4.25 2.52.77-1.28-3.52-2.09V8H12z"/></svg>
       </button>
-      <button id="btnOpenSettings" class="icon-btn" title="Ajuda e Informações" aria-label="Ajuda e Ajustes">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-        </svg>
+    </header>
+
+    <main class="home-main">
+      <h1 class="home-title">Onde você quer treinar hoje?</h1>
+      <p class="home-sub">Escolha uma cena. Eu falo, você repete, e eu te ajudo a soar natural.</p>
+
+      <div id="scenarioList" class="scenario-list"></div>
+
+      <div id="envWarning" class="warning" hidden></div>
+    </main>
+  </section>
+
+  <!-- TELA 2: conversa -->
+  <section id="screen-chat" class="screen" hidden>
+    <header class="topbar">
+      <button id="btnBack" class="icon-btn" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
       </button>
-    </div>
-  </header>
-
-  <!-- Categories Horizontal Bar -->
-  <nav class="categories-bar" id="categoriesBar" aria-label="Filtro de Categorias">
-    <button class="category-chip active" data-cat="all">Todas (60)</button>
-    <button class="category-chip" data-cat="cumprimentos">Cumprimentos</button>
-    <button class="category-chip" data-cat="restaurante">Restaurante</button>
-    <button class="category-chip" data-cat="viagem">Viagem</button>
-    <button class="category-chip" data-cat="trabalho">Trabalho</button>
-    <button class="category-chip" data-cat="compras">Compras</button>
-    <button class="category-chip" data-cat="emergências">Emergências</button>
-    <button class="category-chip" data-cat="srs">Para Hoje (SRS)</button>
-  </nav>
-
-  <!-- Main View -->
-  <main class="main-content">
-
-    <!-- Progress Indicator -->
-    <div class="progress-card">
-      <span id="phraseCounter">Frase 1 de 60</span>
-      <span id="phraseAttemptIndicator">Tentativa: 1</span>
-    </div>
-    <div class="progress-bar-container">
-      <div class="progress-bar-fill" id="progressBarFill"></div>
-    </div>
-
-    <!-- Alert / System Notices -->
-    <div id="statusAlert" class="status-msg hidden"></div>
-
-    <!-- Practice Card -->
-    <section class="practice-card" id="practiceCard">
-      <div class="card-top-info">
-        <span class="badge-category" id="badgeCategory">Cumprimentos</span>
-        <span class="badge-srs" id="badgeSrs" title="Próxima repetição espaçada">
-          <span>📅</span> <span id="srsIntervalText">Nova</span>
-        </span>
+      <div class="chat-title">
+        <span id="chatEmoji"></span>
+        <span id="chatName"></span>
       </div>
-
-      <!-- Portuguese Phrase to Translate -->
-      <div class="prompt-section">
-        <span class="prompt-label">Diga em inglês:</span>
-        <h1 class="phrase-pt" id="phrasePt">Oi, como vai você hoje?</h1>
+      <div class="score" aria-label="Acertos">
+        ✅ <span id="scoreOk">0</span>/<span id="scoreTotal">0</span>
       </div>
+    </header>
 
-      <!-- Audio buttons -->
-      <div class="audio-actions">
-        <button id="btnSpeakPt" class="btn-audio" title="Ouvir em português">
-          <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-          Ouvir em Português
-        </button>
-        <button id="btnListenExample" class="btn-audio" title="Ouvir pronúncia padrão em inglês">
-          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-          Ouvir Exemplo
-        </button>
-        <button id="btnListenSlow" class="btn-audio" title="Ouvir pronúncia mais devagar">
-          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
-          Devagar (0.7x)
-        </button>
+    <main id="thread" class="thread" aria-live="polite"></main>
+
+    <footer class="dock">
+      <div class="dock-actions">
+        <button id="btnListen" class="pill-btn" type="button">🔊 Ouvir</button>
+        <button id="btnSlow" class="pill-btn" type="button">🐢 Devagar</button>
+        <button id="btnMine" class="pill-btn" type="button" disabled>🎧 Minha voz</button>
+        <button id="btnSkip" class="pill-btn" type="button">⏭ Pular</button>
       </div>
-
-      <!-- Result and Word Correction Box -->
-      <div class="result-box hidden" id="resultBox">
-        <div class="result-header">
-          <div class="result-status-text" id="resultStatusText">
-            <span id="resultIcon">❌</span>
-            <span id="resultTitle">Tente novamente</span>
-          </div>
-          <div class="result-score" id="resultScore">Precisão do reconhecimento: 0%</div>
-        </div>
-
-        <div>
-          <div class="transcript-label">Você falou:</div>
-          <div class="transcript-spoken" id="userTranscript">...</div>
-        </div>
-
-        <div>
-          <div class="transcript-label">Frase correta:</div>
-          <div class="diff-target" id="diffCorrection">...</div>
-        </div>
-      </div>
-
-      <!-- Anti-Frustration Rescue Trigger -->
-      <div class="anti-frustration-box hidden" id="antiFrustrationBox">
-        <span class="anti-frustration-text">Parece que o microfone não entendeu bem. Você pode avançar se tiver falado certo:</span>
-        <button id="btnForcePass" class="btn-skip-force">
-          <span>✓</span> Eu falei certo, avançar
-        </button>
-      </div>
-    </section>
-
-    <!-- Navigation actions -->
-    <div class="nav-phrase-actions">
-      <button id="btnPrevPhrase" class="btn-nav">‹ Anterior</button>
-      <button id="btnNextPhrase" class="btn-nav">Próxima ›</button>
-    </div>
-
-  </main>
-
-  <!-- Bottom Microphone Controller (Fixed Center) -->
-  <footer class="bottom-controls">
-    <div class="mic-status-label" id="micStatusLabel">Toque no microfone para começar</div>
-    
-    <div class="mic-wrapper" id="micWrapper">
-      <div class="mic-pulse-ring"></div>
-      <button class="mic-button" id="btnMic" aria-label="Ativar microfone para falar">
-        <svg viewBox="0 0 24 24" id="micIcon">
-          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-        </svg>
+      <button id="btnMic" class="mic-btn" type="button" aria-label="Gravar">
+        <svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+        <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        <span class="spinner" aria-hidden="true"></span>
       </button>
-    </div>
-  </footer>
+      <p id="micHint" class="mic-hint">Toque para gravar</p>
+    </footer>
+  </section>
 
-  <!-- Drawer Modal: Priority Review List -->
-  <div class="modal-overlay" id="reviewModal" aria-hidden="true">
-    <div class="modal-sheet">
-      <div class="modal-header">
-        <h2 class="modal-title">Revisão Prioritária</h2>
-        <button class="icon-btn" id="btnCloseReview" aria-label="Fechar">✕</button>
-      </div>
-      <div class="modal-body" id="reviewListContent">
-        <!-- Injected by JavaScript -->
-      </div>
-    </div>
-  </div>
+  <!-- TELA 3: histórico -->
+  <section id="screen-history" class="screen" hidden>
+    <header class="topbar">
+      <button id="btnHistoryBack" class="icon-btn" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      </button>
+      <div class="chat-title">Histórico</div>
+      <button id="btnClearHistory" class="text-btn" type="button">Limpar</button>
+    </header>
+    <main class="history-main">
+      <div id="historySummary" class="history-summary"></div>
+      <ul id="historyList" class="history-list"></ul>
+    </main>
+  </section>
 
-  <!-- Drawer Modal: Settings & Instructions -->
-  <div class="modal-overlay" id="settingsModal" aria-hidden="true">
-    <div class="modal-sheet">
-      <div class="modal-header">
-        <h2 class="modal-title">Como Funciona</h2>
-        <button class="icon-btn" id="btnCloseSettings" aria-label="Fechar">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="help-card">
-          <h4>Fluxo automático</h4>
-          <p>1. O app fala a frase em português.</p>
-          <p>2. Assim que ele termina de falar, o microfone abre para você responder em inglês.</p>
-          <p>3. Se acertar com 85% ou mais de precisão, ele toca a pronúncia correta e pula sozinho após 1,5 segundo.</p>
-        </div>
-
-        <div class="help-card">
-          <h4>Repetição Espaçada</h4>
-          <p>Frases acertadas voltam em 3 dias, depois 7 e 15 dias. Frases com erro voltam logo no dia seguinte.</p>
-        </div>
-
-        <div class="help-card">
-          <h4>Dicas de Microfone</h4>
-          <p>Se o navegador pedir permissão, clique em Permitir. No celular Android ou computador, use preferencialmente o Google Chrome.</p>
-        </div>
-
-        <button id="btnResetProgress" class="btn-skip-force" style="background: rgba(244, 63, 94, 0.2); border-color: rgba(244, 63, 94, 0.4); color: #fb7185;">
-          Zerar todo o histórico de progresso
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <script src="./app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

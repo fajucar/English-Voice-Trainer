@@ -1,0 +1,247 @@
+// Função serverless da Vercel: recebe o áudio do aluno e pede ao Gemini
+// para avaliar a pronúncia e continuar a conversa do cenário.
+// A chave fica SOMENTE na variável de ambiente GEMINI_API_KEY.
+
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+const MAX_AUDIO_BASE64 = 3500000; // ~2,6 MB de áudio (limite da Vercel é 4,5 MB por requisição)
+const TIMEOUT_MS = 25000;
+
+const MIME_PERMITIDOS = [
+  'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/ogg',
+  'audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/mp3', 'audio/flac'
+];
+
+const SYSTEM_PROMPT = `
+Você é o tutor do app "English Voice Trainer". O aluno é brasileiro, iniciante em inglês, e pratica FALANDO.
+Você conduz uma conversa dentro de um cenário real (cafeteria, hotel, imigração, reunião...) como se fosse uma historinha.
+A cada turno você recebe: o cenário, a história até agora, a frase em inglês que o aluno deveria dizer e um ÁUDIO do aluno tentando dizer essa frase.
+
+COMO AVALIAR
+- Avalie o SOM do áudio, não só se as palavras estão lá. Ouça vogais, finais de palavra, o H, as ligações entre palavras.
+- Seja justo com iniciante: sotaque brasileiro é aceitável se um nativo entenderia sem esforço. Não reprove por detalhe pequeno.
+- Reprove (acertou = false) quando: faltar palavra importante, trocar palavra, ou um som estiver claramente "aportuguesado" a ponto de atrapalhar (ex.: TH saindo como T, D, F ou S em "think" e "the"; T ou D duro entre vogais em "water", "butter", "get to"; "Can I have a" falado separado em vez de emendado; o "e" final pronunciado em "have", "make", "cake"; sílaba a mais, frase toda picada palavra por palavra).
+- Se o áudio estiver mudo, só com ruído ou em português: acertou = false, palavrasErradas = [], transcricao = "", feedback = "Não consegui te ouvir direito. Fala mais perto do microfone.", macete = "".
+- "transcricao": escreva o que você realmente ouviu.
+- "palavrasErradas": no máximo 3 palavras DA FRASE ESPERADA que saíram com som errado ou faltaram, escritas exatamente como aparecem na frase. Lista vazia se acertou.
+
+MACETES (use só estes, pelo nome, aplicados à palavra específica do aluno)
+1. "Kenai e Eva": conectar "Can I have a" soando como "Kenai" + "Eva", tudo emendado. Use quando o aluno falou "Can I have a" (ou um trecho parecido) picado, palavra por palavra.
+2. "E Mágico": o "e" único no final de palavras como have, make, cake é mudo. have = "rév", make = "meik", cake = "keik". Use quando o aluno pronunciou esse "e" final (ex.: "révi", "meiki").
+3. "Sopa sem sal": o som do TH é feito com a língua entre os dentes, soltando o ar. Use quando o TH saiu como T, D, F ou S (ex.: "think" virou "tink" ou "fink", "the" virou "dâ").
+4. "Som de R do português": quando T ou D ficam entre vogais (water, butter, get to), soam como o R do português de "caro". water = "uórer", butter = "bârer", get to = "guéru". Use quando o aluno fez um T ou D duro nesses casos.
+5. "Técnica do Ponto": em frases longas, fazer pausas imaginárias a cada 2 ou 3 palavras para falar sem travar. Ex.: "I have a reservation / for tonight." Use quando o aluno travou, hesitou ou se perdeu numa frase longa.
+Escreva o macete em 1 ou 2 frases curtas, com a pronúncia aportuguesada entre aspas. Comece com o nome do macete. Ex.: "Kenai e Eva: emenda tudo, 'Kenai-Eva latte', sem parar entre as palavras."
+Se o erro do aluno não se encaixar em nenhum dos 5 macetes, NÃO invente macete e não use nenhum desses nomes. No campo "macete", dê uma dica curta e prática, em português, sobre aquele som específico (com a pronúncia aportuguesada entre aspas) e peça para repetir. Ex.: "No 'please', estica o 'i': 'pliiz', e repete."
+
+TOM
+- Encorajador, direto e prático, como um amigo que manja de inglês. Frases curtas.
+- NUNCA use termos gramaticais ou técnicos (verbo, sujeito, artigo, pronome, preposição, tempo verbal, fonema, fonética, vogal átona, schwa, consoante surda etc.).
+- "feedback": se acertou, parabéns curto (até 8 palavras, ex.: "Mandou bem! Soou natural."). Se errou, uma frase curta de incentivo pedindo para repetir (ex.: "Quase! Bora de novo.").
+
+COMO CONTINUAR A HISTÓRIA
+- Nunca ensine frase solta: tudo acontece dentro do cenário, como uma cena que avança.
+- Se acertou = true: avance a cena.
+  - "cena": 1 ou 2 frases em português contando o que acontece agora (ex.: "O barista anota seu pedido e pergunta o tamanho:").
+  - "falaPersonagem": o que o outro personagem diz agora, em inglês simples e curto.
+  - "proximaFala": a próxima frase que o ALUNO deve dizer, em inglês, natural e curta (3 a 10 palavras), útil na vida real, respondendo ao personagem.
+  - "traducao": tradução natural da proximaFala para o português do Brasil.
+  - "chunk": o pedaço reaproveitável da proximaFala no formato "parte fixa + [o que muda]", ex.: "Can I have a + [item]" ou "I'd like to + [ação]". A parte fixa deve aparecer igualzinha dentro da proximaFala.
+  - Reaproveite chunks que já apareceram quando fizer sentido, para fixar.
+- Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "".
+- "fimDaCena": true somente quando a história chegar a um final natural (normalmente depois de 6 a 8 falas do aluno). Nesse caso, falaPersonagem é a despedida do personagem, cena fecha a história em português, e proximaFala é uma despedida curta do aluno (ex.: "Thank you, have a nice day!").
+
+Responda SOMENTE com o JSON no formato pedido.
+`.trim();
+
+const RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    acertou: { type: 'BOOLEAN' },
+    transcricao: { type: 'STRING' },
+    palavrasErradas: { type: 'ARRAY', items: { type: 'STRING' } },
+    macete: { type: 'STRING' },
+    feedback: { type: 'STRING' },
+    cena: { type: 'STRING' },
+    falaPersonagem: { type: 'STRING' },
+    proximaFala: { type: 'STRING' },
+    traducao: { type: 'STRING' },
+    chunk: { type: 'STRING' },
+    fimDaCena: { type: 'BOOLEAN' }
+  },
+  required: [
+    'acertou', 'transcricao', 'palavrasErradas', 'macete', 'feedback',
+    'cena', 'falaPersonagem', 'proximaFala', 'traducao', 'chunk', 'fimDaCena'
+  ],
+  propertyOrdering: [
+    'transcricao', 'acertou', 'palavrasErradas', 'macete', 'feedback',
+    'cena', 'falaPersonagem', 'proximaFala', 'traducao', 'chunk', 'fimDaCena'
+  ]
+};
+
+function texto(v, max = 400) {
+  return typeof v === 'string' ? v.trim().slice(0, max) : '';
+}
+
+function montarContexto({ cenario, fraseEsperada, traducao, chunk, historico, turno, pular }) {
+  const linhas = (Array.isArray(historico) ? historico : [])
+    .slice(-8)
+    .map((h) => {
+      const personagem = texto(h && h.personagem, 200);
+      const frase = texto(h && h.frase, 200);
+      return `- Personagem: "${personagem}" | Aluno disse: "${frase}"`;
+    });
+
+  return [
+    `CENÁRIO: ${texto(cenario, 600)}`,
+    `TURNO DO ALUNO: ${Number(turno) || 1}`,
+    'HISTÓRIA ATÉ AGORA:',
+    linhas.length ? linhas.join('\n') : '- (início da cena)',
+    '',
+    `FRASE QUE O ALUNO DEVERIA DIZER AGORA: "${texto(fraseEsperada, 300)}"`,
+    `TRADUÇÃO: "${texto(traducao, 300)}"`,
+    `CHUNK: ${texto(chunk, 200)}`,
+    '',
+    pular
+      ? 'NÃO há áudio: o aluno pulou esta frase. Avance a cena como se ele tivesse dito a frase esperada. Use acertou = true, transcricao = "", palavrasErradas = [], macete = "", feedback = "".'
+      : 'O áudio anexado é o aluno tentando dizer essa frase. Avalie o som e responda no JSON.'
+  ].join('\n');
+}
+
+function normalizar(r, entrada) {
+  const acertou = entrada.pular || r.acertou === true;
+  const resultado = {
+    acertou,
+    transcricao: texto(r.transcricao, 300),
+    palavrasErradas: Array.isArray(r.palavrasErradas)
+      ? r.palavrasErradas.map((p) => texto(p, 40)).filter(Boolean).slice(0, 3)
+      : [],
+    macete: texto(r.macete, 400),
+    feedback: texto(r.feedback, 200),
+    cena: texto(r.cena, 400),
+    falaPersonagem: texto(r.falaPersonagem, 300),
+    proximaFala: texto(r.proximaFala, 300),
+    traducao: texto(r.traducao, 300),
+    chunk: texto(r.chunk, 200),
+    fimDaCena: r.fimDaCena === true
+  };
+
+  // Se errou, garante que a frase não muda: o aluno precisa repetir antes de avançar.
+  if (!acertou) {
+    resultado.proximaFala = texto(entrada.fraseEsperada, 300);
+    resultado.traducao = texto(entrada.traducao, 300);
+    resultado.chunk = texto(entrada.chunk, 200);
+    resultado.cena = '';
+    resultado.falaPersonagem = '';
+    resultado.fimDaCena = false;
+  }
+  return resultado;
+}
+
+module.exports = async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ erro: 'Use POST.' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ erro: 'GEMINI_API_KEY não configurada na Vercel.' });
+  }
+
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { body = null; }
+  }
+  if (!body || typeof body !== 'object') {
+    return res.status(400).json({ erro: 'Corpo da requisição inválido.' });
+  }
+
+  const pular = body.pular === true;
+  const audio = typeof body.audio === 'string' ? body.audio.replace(/^data:[^,]*,/, '') : '';
+  const mimeType = texto(body.mimeType, 60).split(';')[0].toLowerCase() || 'audio/wav';
+  const fraseEsperada = texto(body.fraseEsperada, 300);
+
+  if (!fraseEsperada) return res.status(400).json({ erro: 'Frase esperada não enviada.' });
+  if (!pular) {
+    if (!audio) return res.status(400).json({ erro: 'Áudio não enviado.' });
+    if (audio.length > MAX_AUDIO_BASE64) return res.status(413).json({ erro: 'Áudio muito longo. Grave até 15 segundos.' });
+    if (!MIME_PERMITIDOS.includes(mimeType)) return res.status(415).json({ erro: `Formato de áudio não suportado: ${mimeType}` });
+  }
+
+  const entrada = {
+    cenario: body.cenario,
+    fraseEsperada,
+    traducao: body.traducao,
+    chunk: body.chunk,
+    historico: body.historico,
+    turno: body.turno,
+    pular
+  };
+
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: RESPONSE_SCHEMA,
+    temperature: 0.4
+  };
+  // Nos modelos 2.5 o "pensamento" só deixa a resposta mais lenta aqui.
+  if (/2\.5-flash/.test(MODEL)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
+  const parts = [{ text: montarContexto(entrada) }];
+  if (!pular) parts.push({ inlineData: { mimeType, data: audio } });
+
+  const payload = {
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents: [{ role: 'user', parts }],
+    generationConfig
+  };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const resp = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+
+    if (!resp.ok) {
+      const detalhe = await resp.text().catch(() => '');
+      console.error('Gemini erro', resp.status, detalhe.slice(0, 500));
+      if (resp.status === 429) {
+        return res.status(429).json({ erro: 'Limite gratuito do Gemini atingido. Espere um minuto e tente de novo.' });
+      }
+      return res.status(502).json({ erro: `O Gemini respondeu com erro (${resp.status}).` });
+    }
+
+    const data = await resp.json();
+    const partes = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+    const bruto = partes.map((p) => p.text || '').join('').trim();
+    if (!bruto) {
+      console.error('Gemini sem conteúdo', JSON.stringify(data).slice(0, 500));
+      return res.status(502).json({ erro: 'O Gemini não devolveu resposta. Tente de novo.' });
+    }
+
+    let json;
+    try {
+      json = JSON.parse(bruto.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+    } catch {
+      console.error('JSON inválido do Gemini', bruto.slice(0, 500));
+      return res.status(502).json({ erro: 'Resposta inesperada do Gemini. Tente de novo.' });
+    }
+
+    return res.status(200).json(normalizar(json, entrada));
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      return res.status(504).json({ erro: 'O Gemini demorou demais. Tente de novo.' });
+    }
+    console.error('Falha ao chamar o Gemini', err);
+    return res.status(500).json({ erro: 'Falha ao falar com o Gemini.' });
+  } finally {
+    clearTimeout(timer);
+  }
+};

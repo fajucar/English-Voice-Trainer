@@ -2,12 +2,11 @@
   "version": 2,
   "outputDirectory": ".",
   "cleanUrls": true,
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
+  "functions": {
+    "api/tutor.js": {
+      "maxDuration": 30
     }
-  ],
+  },
   "headers": [
     {
       "source": "/sw.js",
@@ -28,6 +27,10 @@
         {
           "key": "X-Content-Type-Options",
           "value": "nosniff"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "microphone=(self)"
         }
       ]
     }
