@@ -1,11 +1,13 @@
-const CACHE_NAME = 'voice-trainer-v3';
+const CACHE_NAME = 'voice-trainer-v4';
 const ASSETS = [
   '/',
   '/style.css',
   '/app.js',
   '/manifest.json',
   '/icons/icon-192.png',
-  '/icons/icon-512.png'
+  '/icons/icon-512.png',
+  '/icons/icon-maskable.png',
+  '/icons/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {
