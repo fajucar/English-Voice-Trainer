@@ -1,7 +1,8 @@
 *.txt
-.env
-.env.*
+# Chaves e segredos: nunca vão para o deploy
+.env*
 !.env.example
+GEMINI*
 .git
 node_modules
 phrases.json
