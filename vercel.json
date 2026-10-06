@@ -5,6 +5,9 @@
   "functions": {
     "api/tutor.js": {
       "maxDuration": 30
+    },
+    "api/chat.js": {
+      "maxDuration": 30
     }
   },
   "headers": [

@@ -203,6 +203,7 @@ function startScenario(sc) {
     concluida: false
   };
   setMyAudio(null);
+  resetTeacherChat();
   $('thread').innerHTML = '';
   $('chatEmoji').textContent = sc.emoji;
   $('chatName').textContent = sc.nome;
@@ -325,7 +326,7 @@ function setMicState(mode) {
   btn.classList.toggle('busy', mode === 'busy');
   btn.disabled = mode === 'busy' || state.ended;
   btn.setAttribute('aria-label', mode === 'recording' ? 'Parar gravação' : 'Gravar');
-  ['btnListen', 'btnSlow', 'btnSkip'].forEach((id) => { $(id).disabled = mode !== 'idle' || state.ended; });
+  ['btnListen', 'btnSlow', 'btnSkip', 'btnTeacher'].forEach((id) => { $(id).disabled = mode !== 'idle' || state.ended; });
 }
 
 function formatMacete(m) {
@@ -340,6 +341,8 @@ function handleResult(r, { pulou = false } = {}) {
     state.tentativasFrase++;
     if (r.transcricao) addBubble('me', `🗣️ “${esc(r.transcricao)}”`);
   }
+
+  rememberForTeacher(r);
 
   if (r.acertou) {
     if (!pulou) {
@@ -735,6 +738,219 @@ function renderHistory() {
   });
 }
 
+/* ================= Chat com o professor ================= */
+const MAX_CHAT_MSGS = 6;
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+
+const teacher = {
+  mensagens: [],          // [{ autor: 'aluno' | 'professor', texto }]
+  ultimoErro: null,       // { palavra, frase }
+  ultimoMacete: null,     // { texto, frase }
+  enviando: false,
+  recog: null
+};
+
+function resetTeacherChat() {
+  stopTeacherMic(true);
+  teacher.mensagens = [];
+  teacher.ultimoErro = null;
+  teacher.ultimoMacete = null;
+  teacher.enviando = false;
+  $('teacherMessages').innerHTML = '';
+  closeTeacher();
+}
+
+// Chamado pelo handleResult: guarda o que o professor precisa saber da última tentativa.
+function rememberForTeacher(r) {
+  const frase = state.turn ? state.turn.frase : '';
+  if (r.palavrasErradas && r.palavrasErradas.length) teacher.ultimoErro = { palavra: r.palavrasErradas[0], frase };
+  if (r.macete) teacher.ultimoMacete = { texto: r.macete, frase };
+}
+
+function openTeacher() {
+  if (!state.turn || state.rec || state.busy) return;
+  stopSpeaking();
+  const t = state.turn;
+  $('teacherContext').innerHTML = `Frase atual: <strong>${esc(t.frase)}</strong>`;
+  if (!$('teacherMessages').children.length) {
+    addTeacherBubble('professor', `Oi! Me pergunta qualquer coisa sobre a frase “${t.frase}”. Pode digitar${SpeechRec ? ', falar no microfone' : ''} ou tocar num atalho.`);
+  }
+  $('teacherPanel').hidden = false;
+  document.body.classList.add('modal-open');
+  scrollTeacherToBottom();
+}
+
+function closeTeacher() {
+  const panel = $('teacherPanel');
+  if (panel.hidden) return;
+  stopTeacherMic(true);
+  stopSpeaking();
+  panel.hidden = true;
+  document.body.classList.remove('modal-open');
+  // Volta para a mesma frase da cena.
+  if (state.targetEl) state.targetEl.scrollIntoView({ block: 'center' });
+}
+
+function scrollTeacherToBottom() {
+  const box = $('teacherMessages');
+  requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+}
+
+function addTeacherBubble(autor, texto, falar) {
+  const el = document.createElement('div');
+  el.className = 'tbubble ' + (autor === 'aluno' ? 'from-me' : autor === 'erro' ? 'from-error' : 'from-teacher');
+  const p = document.createElement('div');
+  p.className = 'tbubble-text';
+  p.textContent = texto;
+  el.appendChild(p);
+
+  if (falar && falar.length) {
+    const row = document.createElement('div');
+    row.className = 'say-row';
+    falar.forEach((frase) => row.appendChild(makeSayButton(frase)));
+    el.appendChild(row);
+  }
+  $('teacherMessages').appendChild(el);
+  scrollTeacherToBottom();
+  return el;
+}
+
+// Botão 🔊: 1º toque fala devagar (0.5x), o próximo em velocidade normal, e assim por diante.
+function makeSayButton(frase) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'say-btn';
+  btn.dataset.lento = '1';
+  const label = document.createElement('span');
+  label.textContent = '🔊 ' + frase;
+  const speed = document.createElement('span');
+  speed.className = 'say-speed';
+  speed.textContent = '0.5x';
+  btn.append(label, speed);
+  btn.setAttribute('aria-label', `Ouvir "${frase}" devagar`);
+  btn.addEventListener('click', () => {
+    const lento = btn.dataset.lento === '1';
+    stopTeacherMic(true);
+    stopSpeaking();
+    speak(frase, { rate: lento ? 0.5 : 1 });
+    btn.dataset.lento = lento ? '0' : '1';
+    speed.textContent = lento ? '1x' : '0.5x';
+    btn.setAttribute('aria-label', `Ouvir "${frase}" ${lento ? 'em velocidade normal' : 'devagar'}`);
+  });
+  return btn;
+}
+
+function setTeacherSending(on) {
+  teacher.enviando = on;
+  $('btnTeacherSend').disabled = on;
+  document.querySelectorAll('#teacherPanel .chip').forEach((c) => { c.disabled = on; });
+}
+
+async function sendTeacher(textoAluno) {
+  const pergunta = String(textoAluno || '').trim();
+  if (!pergunta || teacher.enviando || !state.turn) return;
+
+  stopSpeaking();
+  $('teacherInput').value = '';
+  teacher.mensagens.push({ autor: 'aluno', texto: pergunta });
+  addTeacherBubble('aluno', pergunta);
+  const digitando = addTeacherBubble('professor', '…');
+  digitando.classList.add('typing');
+  setTeacherSending(true);
+
+  const t = state.turn;
+  const erro = teacher.ultimoErro && teacher.ultimoErro.frase === t.frase ? teacher.ultimoErro.palavra : '';
+  const macete = teacher.ultimoMacete && teacher.ultimoMacete.frase === t.frase ? teacher.ultimoMacete.texto : '';
+
+  try {
+    let resp;
+    try {
+      resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frase: t.frase,
+          traducao: t.traducao,
+          chunk: t.chunk,
+          ultimaPalavraErrada: erro,
+          macete,
+          mensagens: teacher.mensagens.slice(-MAX_CHAT_MSGS)
+        })
+      });
+    } catch {
+      throw new Error('Sem internet. Conecte e tente de novo.');
+    }
+    const json = await resp.json().catch(() => null);
+    console.log('[chat] resposta bruta', resp.status, json);
+    if (!resp.ok || !json || !json.resposta) {
+      throw new Error((json && json.erro) || `Erro no servidor (${resp.status}).`);
+    }
+
+    digitando.remove();
+    teacher.mensagens.push({ autor: 'professor', texto: json.resposta });
+    addTeacherBubble('professor', json.resposta, Array.isArray(json.falar) ? json.falar : []);
+  } catch (err) {
+    digitando.remove();
+    // Tira a pergunta do histórico enviado; ela continua visível e pode ser mandada de novo.
+    teacher.mensagens.pop();
+    addTeacherBubble('erro', '⚠️ ' + (err.message || 'O professor não conseguiu responder agora.'));
+  } finally {
+    setTeacherSending(false);
+  }
+}
+
+// Microfone do chat: reconhecimento de fala do navegador, em português.
+function toggleTeacherMic() {
+  if (teacher.recog) return stopTeacherMic(false);
+  if (!SpeechRec || teacher.enviando) return;
+  stopSpeaking();
+
+  const rec = new SpeechRec();
+  rec.lang = 'pt-BR';
+  rec.interimResults = true;
+  rec.continuous = false;
+  rec.maxAlternatives = 1;
+  let final = '';
+
+  rec.onresult = (e) => {
+    let parcial = '';
+    for (let i = 0; i < e.results.length; i++) {
+      parcial += e.results[i][0].transcript;
+      if (e.results[i].isFinal) final = parcial;
+    }
+    $('teacherInput').value = parcial;
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      addTeacherBubble('erro', '⚠️ Permissão do microfone negada. Libere nas configurações do navegador ou digite a pergunta.');
+    } else if (e.error === 'no-speech') {
+      addTeacherBubble('erro', '⚠️ Não ouvi nada. Toque no microfone e fale de novo.');
+    }
+  };
+  rec.onend = () => {
+    const cancelado = rec.cancelado;
+    teacher.recog = null;
+    $('btnTeacherMic').classList.remove('listening');
+    if (!cancelado && final.trim()) sendTeacher(final);
+  };
+
+  try {
+    rec.start();
+    teacher.recog = rec;
+    $('btnTeacherMic').classList.add('listening');
+  } catch {
+    teacher.recog = null;
+  }
+}
+
+// cancelar = true descarta o que foi ouvido (ao fechar o painel, por exemplo).
+function stopTeacherMic(cancelar) {
+  const rec = teacher.recog;
+  if (!rec) return;
+  rec.cancelado = cancelar;
+  try { cancelar ? rec.abort() : rec.stop(); } catch { /* já parado */ }
+}
+
 /* ================= Eventos ================= */
 $('btnMic').addEventListener('click', toggleMic);
 $('btnListen').addEventListener('click', () => speakTurn());
@@ -755,6 +971,23 @@ $('btnClearHistory').addEventListener('click', () => {
     renderHistory();
   }
 });
+
+$('btnTeacher').addEventListener('click', openTeacher);
+$('btnTeacherClose').addEventListener('click', closeTeacher);
+$('teacherPanel').addEventListener('click', (e) => { if (e.target === $('teacherPanel')) closeTeacher(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTeacher(); });
+$('teacherForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  stopTeacherMic(true);
+  sendTeacher($('teacherInput').value);
+});
+document.querySelectorAll('#teacherPanel .chip').forEach((chip) => {
+  chip.addEventListener('click', () => sendTeacher(chip.dataset.msg));
+});
+if (SpeechRec) {
+  $('btnTeacherMic').hidden = false;
+  $('btnTeacherMic').addEventListener('click', toggleTeacherMic);
+}
 
 renderHome();
 
