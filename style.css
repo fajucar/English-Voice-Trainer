@@ -170,6 +170,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   animation: pop 0.25s ease-out;
 }
 .target.done { border-color: var(--border); box-shadow: none; opacity: 0.6; }
+.target-warn { font-size: 0.82rem; color: var(--warn); margin-bottom: 6px; }
 .target-label { font-size: 0.75rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
 .target-en { font-size: 1.45rem; font-weight: 700; line-height: 1.25; margin: 6px 0 4px; }
 .target-en mark { background: rgba(255, 209, 102, 0.18); color: var(--chunk); border-radius: 6px; padding: 0 3px; }

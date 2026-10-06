@@ -5,7 +5,8 @@
 const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const MAX_AUDIO_BASE64 = 3500000; // ~2,6 MB de áudio (limite da Vercel é 4,5 MB por requisição)
-const TIMEOUT_MS = 25000;
+const TIMEOUT_MS = 18000;     // primeira chamada ao Gemini
+const TEMPO_TOTAL_MS = 27000; // somando a nova tentativa (a função tem 30 s na Vercel)
 
 const MIME_PERMITIDOS = [
   'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/ogg',
@@ -50,6 +51,7 @@ COMO CONTINUAR A HISTÓRIA
   - Reaproveite chunks que já apareceram quando fizer sentido, para fixar.
 - Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "".
 - "fimDaCena": true somente quando a história chegar a um final natural (normalmente depois de 6 a 8 falas do aluno). Nesse caso, falaPersonagem é a despedida do personagem, cena fecha a história em português, e proximaFala é uma despedida curta do aluno (ex.: "Thank you, have a nice day!").
+- REGRA FIRME: proximaFala é obrigatória em todo turno em que acertou:true, exceto quando ultimaFala for true (o contexto avisa com "ÚLTIMA FALA DA CENA: sim"). Nunca devolva proximaFala vazia, nunca repita a fala do personagem nela, e ela deve sempre estar em inglês, com a tradução em português no campo traducao.
 
 Responda SOMENTE com o JSON no formato pedido.
 `.trim();
@@ -83,7 +85,7 @@ function texto(v, max = 400) {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
 }
 
-function montarContexto({ cenario, fraseEsperada, traducao, chunk, historico, turno, pular }) {
+function montarContexto({ cenario, fraseEsperada, traducao, chunk, historico, turno, pular, ultimaFala }) {
   const linhas = (Array.isArray(historico) ? historico : [])
     .slice(-8)
     .map((h) => {
@@ -101,6 +103,7 @@ function montarContexto({ cenario, fraseEsperada, traducao, chunk, historico, tu
     `FRASE QUE O ALUNO DEVERIA DIZER AGORA: "${texto(fraseEsperada, 300)}"`,
     `TRADUÇÃO: "${texto(traducao, 300)}"`,
     `CHUNK: ${texto(chunk, 200)}`,
+    `ÚLTIMA FALA DA CENA: ${ultimaFala ? 'sim (a cena termina depois desta frase; se acertou, proximaFala pode ficar vazia)' : 'não'}`,
     '',
     pular
       ? 'NÃO há áudio: o aluno pulou esta frase. Avance a cena como se ele tivesse dito a frase esperada. Use acertou = true, transcricao = "", palavrasErradas = [], macete = "", feedback = "".'
@@ -136,6 +139,64 @@ function normalizar(r, entrada) {
     resultado.fimDaCena = false;
   }
   return resultado;
+}
+
+const ACENTOS_PT = /[áàâãéêíóôõúç]/i;
+const PALAVRAS_PT = new Set(['você', 'não', 'que', 'de', 'um', 'uma', 'para', 'com', 'quero', 'obrigado']);
+
+function compactar(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, '');
+}
+
+function parecePortugues(frase) {
+  if (ACENTOS_PT.test(frase)) return true;
+  const palavras = frase.toLowerCase().split(/[^a-zà-ÿ]+/).filter(Boolean);
+  return palavras.filter((p) => PALAVRAS_PT.has(p)).length >= 2;
+}
+
+// Confere se o turno seguinte veio utilizável. Devolve o problema em texto, ou '' se estiver ok.
+function validar(r, entrada) {
+  if (!r.acertou || entrada.ultimaFala) return '';
+  const p = r.proximaFala;
+  if (!p) return 'proximaFala veio vazia';
+  if (compactar(p) === compactar(r.falaPersonagem)) return 'proximaFala repetiu a fala do personagem';
+  if (compactar(p) === compactar(r.traducao)) return 'proximaFala veio igual à traducao';
+  if (parecePortugues(p)) return 'proximaFala não está em inglês';
+  if (!r.traducao) return 'traducao veio vazia';
+  return '';
+}
+
+// Chama o Gemini uma vez. Devolve { erroHttp } ou { bruto, json } (json = null se veio vazio/quebrado).
+async function chamarGemini(payload, apiKey, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+
+    if (!resp.ok) {
+      const detalhe = await resp.text().catch(() => '');
+      console.error('Gemini erro', resp.status, detalhe.slice(0, 500));
+      return { erroHttp: resp.status };
+    }
+
+    const data = await resp.json();
+    const partes = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+    const bruto = partes.map((p) => p.text || '').join('').trim();
+    if (!bruto) return { bruto: JSON.stringify(data).slice(0, 800), json: null };
+
+    try {
+      return { bruto, json: JSON.parse(bruto.replace(/^```(?:json)?\s*|\s*```$/g, '')) };
+    } catch {
+      return { bruto, json: null };
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 module.exports = async function handler(req, res) {
@@ -178,7 +239,8 @@ module.exports = async function handler(req, res) {
     chunk: body.chunk,
     historico: body.historico,
     turno: body.turno,
-    pular
+    pular,
+    ultimaFala: body.ultimaFala === true
   };
 
   const generationConfig = {
@@ -198,50 +260,74 @@ module.exports = async function handler(req, res) {
     generationConfig
   };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
+  const inicio = Date.now();
+  let primeira;
   try {
-    const resp = await fetch(GEMINI_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-
-    if (!resp.ok) {
-      const detalhe = await resp.text().catch(() => '');
-      console.error('Gemini erro', resp.status, detalhe.slice(0, 500));
-      if (resp.status === 429) {
-        return res.status(429).json({ erro: 'Limite gratuito do Gemini atingido. Espere um minuto e tente de novo.' });
-      }
-      return res.status(502).json({ erro: `O Gemini respondeu com erro (${resp.status}).` });
-    }
-
-    const data = await resp.json();
-    const partes = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-    const bruto = partes.map((p) => p.text || '').join('').trim();
-    if (!bruto) {
-      console.error('Gemini sem conteúdo', JSON.stringify(data).slice(0, 500));
-      return res.status(502).json({ erro: 'O Gemini não devolveu resposta. Tente de novo.' });
-    }
-
-    let json;
-    try {
-      json = JSON.parse(bruto.replace(/^```(?:json)?\s*|\s*```$/g, ''));
-    } catch {
-      console.error('JSON inválido do Gemini', bruto.slice(0, 500));
-      return res.status(502).json({ erro: 'Resposta inesperada do Gemini. Tente de novo.' });
-    }
-
-    return res.status(200).json(normalizar(json, entrada));
+    primeira = await chamarGemini(payload, apiKey, TIMEOUT_MS);
   } catch (err) {
     if (err && err.name === 'AbortError') {
       return res.status(504).json({ erro: 'O Gemini demorou demais. Tente de novo.' });
     }
     console.error('Falha ao chamar o Gemini', err);
     return res.status(500).json({ erro: 'Falha ao falar com o Gemini.' });
-  } finally {
-    clearTimeout(timer);
   }
+
+  if (primeira.erroHttp) {
+    if (primeira.erroHttp === 429) {
+      return res.status(429).json({ erro: 'Limite gratuito do Gemini atingido. Espere um minuto e tente de novo.' });
+    }
+    return res.status(502).json({ erro: `O Gemini respondeu com erro (${primeira.erroHttp}).` });
+  }
+
+  let resultado = primeira.json ? normalizar(primeira.json, entrada) : null;
+  const problema = resultado ? validar(resultado, entrada) : 'o JSON veio vazio ou quebrado';
+  if (!problema) return res.status(200).json(resultado);
+
+  console.error('[tutor] resposta inválida (tentativa 1):', problema, '| bruto:', primeira.bruto.slice(0, 800));
+
+  // Uma nova tentativa, avisando o Gemini do que faltou, se ainda houver tempo.
+  const restante = TEMPO_TOTAL_MS - (Date.now() - inicio);
+  if (restante > 4000) {
+    const payloadNovo = {
+      ...payload,
+      contents: [{
+        role: 'user',
+        parts: [
+          ...parts,
+          { text: `ATENÇÃO: sua resposta anterior foi rejeitada porque ${problema}. Responda de novo seguindo TODAS as regras, principalmente a REGRA FIRME sobre proximaFala.` }
+        ]
+      }]
+    };
+    try {
+      const segunda = await chamarGemini(payloadNovo, apiKey, restante);
+      if (segunda.json) {
+        const r2 = normalizar(segunda.json, entrada);
+        const problema2 = validar(r2, entrada);
+        if (!problema2) return res.status(200).json(r2);
+        console.error('[tutor] resposta inválida (tentativa 2):', problema2, '| bruto:', segunda.bruto.slice(0, 800));
+        if (!resultado) resultado = r2;
+      } else if (!segunda.erroHttp) {
+        console.error('[tutor] resposta inválida (tentativa 2): o JSON veio vazio ou quebrado | bruto:', segunda.bruto.slice(0, 800));
+      }
+    } catch (err) {
+      console.error('[tutor] falha na tentativa 2', err && err.name);
+    }
+  }
+
+  // Sem JSON utilizável nas duas tentativas: não dá para saber se acertou.
+  if (!resultado) {
+    return res.status(502).json({ erro: 'Resposta inesperada do Gemini. Tente de novo.' });
+  }
+
+  // Acertou, mas sem próxima fala válida: mantém a frase atual e avisa o app.
+  return res.status(200).json({
+    ...resultado,
+    semProximaFala: true,
+    cena: '',
+    falaPersonagem: '',
+    proximaFala: texto(entrada.fraseEsperada, 300),
+    traducao: texto(entrada.traducao, 300),
+    chunk: texto(entrada.chunk, 200),
+    fimDaCena: false
+  });
 };

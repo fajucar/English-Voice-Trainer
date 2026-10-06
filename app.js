@@ -76,6 +76,7 @@ const MIN_REC_MS = 600;
 const state = {
   scenario: null,
   turn: null,          // { frase, traducao, chunk, falaPersonagem }
+  ultimoTurnoValido: null,
   targetEl: null,
   historico: [],       // [{ personagem, frase }] enviado ao Gemini como contexto
   turno: 1,
@@ -184,6 +185,7 @@ function startScenario(sc) {
   stopSpeaking();
   state.scenario = sc;
   state.turn = null;
+  state.ultimoTurnoValido = null;
   state.targetEl = null;
   state.historico = [];
   state.turno = 1;
@@ -225,6 +227,7 @@ function scrollToBottom() {
 }
 
 function presentTurn(t) {
+  if (!t.frase) return showMissingNext();
   if (t.cena) addBubble('scene', esc(t.cena));
   if (t.falaPersonagem) {
     addBubble('character', `<div class="speaker">${esc(state.scenario.personagem)}</div><div class="en">${esc(t.falaPersonagem)}</div>`);
@@ -235,6 +238,7 @@ function presentTurn(t) {
     chunk: t.chunk,
     falaPersonagem: t.falaPersonagem || ''
   };
+  state.ultimoTurnoValido = state.turn;
   state.tentativasFrase = 0;
   state.targetEl = null;
   renderTarget([]);
@@ -281,10 +285,19 @@ function renderChunk(chunk) {
 }
 
 function renderTarget(badWords) {
-  const t = state.turn;
+  let t = state.turn;
+  let fallback = false;
+  // Nunca deixa o cartão sem frase: volta para a última frase válida.
+  if (!t || !t.frase) {
+    t = state.ultimoTurnoValido;
+    if (!t) return;
+    state.turn = t;
+    fallback = true;
+  }
   const el = state.targetEl || document.createElement('div');
   el.className = 'target';
   el.innerHTML = `
+    ${fallback ? '<div class="target-warn">⚠️ Mostrando a última frase válida.</div>' : ''}
     <div class="target-label">Sua vez de falar</div>
     <div class="target-en">${highlightPhrase(t.frase, t.chunk, badWords)}</div>
     <div class="target-pt">${esc(t.traducao)}</div>
@@ -333,16 +346,14 @@ function handleResult(r, { pulou = false } = {}) {
       s.acertos++;
       addBubble('feedback-ok', `✅ ${esc(r.feedback || 'Mandou bem!')}${r.macete ? `<div class="trick">${formatMacete(r.macete)}</div>` : ''}`);
     }
-    s.falas++;
-    state.historico.push({ personagem: state.turn.falaPersonagem, frase: state.turn.frase });
-    state.turno++;
-    if (state.targetEl) state.targetEl.classList.add('done');
-    state.targetEl = null;
-
-    if (state.ultimaFala || !r.proximaFala) {
-      if (!state.ultimaFala && r.cena) addBubble('scene', esc(r.cena));
+    // A cena só termina quando o Gemini já avisou que esta era a despedida.
+    if (state.ultimaFala) {
+      registerSpokenLine();
       endScene();
+    } else if (r.semProximaFala || !r.proximaFala) {
+      showMissingNext();
     } else {
+      registerSpokenLine();
       state.ultimaFala = r.fimDaCena === true;
       presentTurn({
         cena: r.cena,
@@ -373,6 +384,22 @@ function handleResult(r, { pulou = false } = {}) {
 
   updateScore();
   saveSession();
+}
+
+function registerSpokenLine() {
+  state.session.falas++;
+  state.historico.push({ personagem: state.turn.falaPersonagem, frase: state.turn.frase });
+  state.turno++;
+  if (state.targetEl) state.targetEl.classList.add('done');
+  state.targetEl = null;
+}
+
+// Acertou, mas a próxima fala não veio: mantém a frase atual na tela e oferece o Pular.
+function showMissingNext() {
+  addBubble('error', '⚠️ Não consegui puxar a próxima fala. Toque em ⏭ Pular para seguir.');
+  if (state.targetEl) $('thread').appendChild(state.targetEl);
+  renderTarget([]);
+  setHint('Toque em ⏭ Pular para seguir');
 }
 
 function endScene() {
@@ -531,7 +558,7 @@ async function skipPhrase() {
     state.busy = false;
     if (!state.ended) {
       setMicState('idle');
-      setHint('Toque para gravar');
+      if (/Avançando/.test($('micHint').textContent)) setHint('Toque para gravar');
     }
   }
 }
@@ -550,6 +577,7 @@ async function callTutor(extra) {
         chunk: t.chunk,
         historico: state.historico.slice(-8),
         turno: state.turno,
+        ultimaFala: state.ultimaFala,
         ...extra
       })
     });
@@ -557,6 +585,7 @@ async function callTutor(extra) {
     throw new Error('Sem internet. Conecte e tente de novo.');
   }
   const json = await resp.json().catch(() => null);
+  console.log('[tutor] resposta bruta', resp.status, json);
   if (!resp.ok || !json) throw new Error((json && json.erro) || `Erro no servidor (${resp.status}).`);
   return json;
 }
