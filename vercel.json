@@ -8,6 +8,9 @@
     },
     "api/chat.js": {
       "maxDuration": 30
+    },
+    "api/praticar.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
