@@ -71,6 +71,7 @@ const SCENARIOS = [
 const STORAGE_KEY = 'evt_historico_v1';
 const MAX_REC_MS = 15000;
 const MIN_REC_MS = 600;
+const SLOW_RATE = 0.55; // velocidade de todos os botões 🐢
 
 /* ================= Estado ================= */
 const state = {
@@ -86,6 +87,7 @@ const state = {
   busy: false,
   ultimaFala: false,   // o Gemini avisou que esta é a fala de despedida
   ended: false,
+  praticando: null,    // treino de balão aguardando o Gemini: { frase, balao, btn }
   myAudioUrl: null
 };
 
@@ -176,7 +178,7 @@ async function speakTurn({ withCharacter = true, slow = false } = {}) {
     await speak(t.falaPersonagem, { rate: 0.95, pitch: 1.15 });
     await wait(350);
   }
-  if (state.turn === t) await speak(t.frase, { rate: slow ? 0.65 : 0.9 });
+  if (state.turn === t) await speak(t.frase, { rate: slow ? SLOW_RATE : 0.9 });
 }
 
 /* ================= Conversa ================= */
@@ -231,7 +233,7 @@ function presentTurn(t) {
   if (!t.frase) return showMissingNext();
   if (t.cena) addBubble('scene', esc(t.cena));
   if (t.falaPersonagem) {
-    addBubble('character', `<div class="speaker">${esc(state.scenario.personagem)}</div><div class="en">${esc(t.falaPersonagem)}</div>`);
+    addBubble('character', `<div class="speaker">${esc(state.scenario.personagem)}</div><div class="en">${esc(t.falaPersonagem)}</div>${practiceBar(t.falaPersonagem)}`);
   }
   state.turn = {
     frase: t.frase,
@@ -302,7 +304,8 @@ function renderTarget(badWords) {
     <div class="target-label">Sua vez de falar</div>
     <div class="target-en">${highlightPhrase(t.frase, t.chunk, badWords)}</div>
     <div class="target-pt">${esc(t.traducao)}</div>
-    ${t.chunk ? `<div class="chunk">🧩 ${renderChunk(t.chunk)}</div>` : ''}`;
+    ${t.chunk ? `<div class="chunk">🧩 ${renderChunk(t.chunk)}</div>` : ''}
+    ${practiceBar(t.frase)}`;
   if (!state.targetEl) {
     $('thread').appendChild(el);
     state.targetEl = el;
@@ -321,12 +324,26 @@ function setHint(text) {
 }
 
 function setMicState(mode) {
+  // Treino de balão: o microfone grande fica desativado, sem aparência de gravando.
+  const treino = !!((state.rec && state.rec.alvo.modo === 'treino') || state.praticando);
   const btn = $('btnMic');
-  btn.classList.toggle('recording', mode === 'recording');
-  btn.classList.toggle('busy', mode === 'busy');
-  btn.disabled = mode === 'busy' || state.ended;
-  btn.setAttribute('aria-label', mode === 'recording' ? 'Parar gravação' : 'Gravar');
+  btn.classList.toggle('recording', mode === 'recording' && !treino);
+  btn.classList.toggle('busy', mode === 'busy' && !treino);
+  btn.disabled = mode === 'busy' || state.ended || treino;
+  btn.setAttribute('aria-label', mode === 'recording' && !treino ? 'Parar gravação' : 'Gravar');
   ['btnListen', 'btnSlow', 'btnSkip', 'btnTeacher'].forEach((id) => { $(id).disabled = mode !== 'idle' || state.ended; });
+  syncBubbleButtons(mode);
+}
+
+// Só uma gravação por vez: enquanto grava ou espera o Gemini, só o botão ativo fica disponível (para parar).
+function syncBubbleButtons(mode) {
+  const ativo = (state.rec && state.rec.alvo.btn) || (state.praticando && state.praticando.btn) || null;
+  document.querySelectorAll('#thread .act-btn').forEach((b) => {
+    const isAtivo = b === ativo;
+    b.classList.toggle('recording', isAtivo && mode === 'recording');
+    b.classList.toggle('busy', isAtivo && mode === 'busy');
+    b.disabled = mode !== 'idle' && !(isAtivo && mode === 'recording');
+  });
 }
 
 function formatMacete(m) {
@@ -445,13 +462,24 @@ function pickMime() {
   return options.find((m) => MediaRecorder.isTypeSupported(m)) || '';
 }
 
-async function toggleMic() {
+// Fluxo normal da cena. btn = o 🎤 do cartão "Sua vez de falar", quando veio de lá (só para destacar).
+async function toggleMic(btn) {
   if (state.busy || state.ended) return;
   if (state.rec) return stopRecording();
-  return startRecording();
+  return startRecording({ modo: 'cena', btn: btn || null });
 }
 
-async function startRecording() {
+// Treino de um balão: avalia só a pronúncia daquela frase, sem mexer na cena.
+function togglePractice(frase, balao, btn) {
+  if (state.rec) {
+    if (state.rec.alvo.btn === btn) stopRecording();
+    return;
+  }
+  if (state.busy) return;
+  startRecording({ modo: 'treino', frase, balao, btn });
+}
+
+async function startRecording(alvo = { modo: 'cena', btn: null }) {
   stopSpeaking();
   if (!window.isSecureContext) return addBubble('error', '⚠️ O microfone só funciona em HTTPS.');
   if (!navigator.mediaDevices || !window.MediaRecorder) return addBubble('error', '⚠️ Este navegador não consegue gravar áudio.');
@@ -471,7 +499,7 @@ async function startRecording() {
 
   const mime = pickMime();
   const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-  const rec = { recorder, stream, chunks: [], start: Date.now(), mime, timer: null, ticker: null };
+  const rec = { recorder, stream, chunks: [], start: Date.now(), mime, timer: null, ticker: null, alvo };
 
   recorder.ondataavailable = (e) => { if (e.data && e.data.size) rec.chunks.push(e.data); };
   recorder.onstop = () => {
@@ -484,7 +512,9 @@ async function startRecording() {
   setMicState('recording');
   const tick = () => {
     const secs = Math.floor((Date.now() - rec.start) / 1000);
-    setHint(`Gravando… ${secs}s · toque para parar`);
+    setHint(alvo.modo === 'treino'
+      ? `Treinando o balão… ${secs}s · toque no 🎤 para parar`
+      : `Gravando… ${secs}s · toque para parar`);
   };
   tick();
   rec.ticker = setInterval(tick, 500);
@@ -520,11 +550,104 @@ async function processRecording(rec) {
   const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || rec.mime || 'audio/webm' });
   if (rec.duration < MIN_REC_MS || !blob.size) {
     setMicState('idle');
-    setHint('Muito curto. Segure a frase inteira e toque para parar.');
+    setHint(state.ended ? 'Cena concluída' : 'Muito curto. Segure a frase inteira e toque para parar.');
+    if (rec.alvo.modo === 'treino') showPracticeResult(rec.alvo.balao, 'erro', '⚠️ Muito curto. Fala a frase inteira e toca no 🎤 para parar.');
     return;
   }
   setMyAudio(blob);
+  if (rec.alvo.modo === 'treino') return sendPractice(blob, rec.alvo);
   await sendToTutor(blob);
+}
+
+function showPracticeResult(balao, tipo, html) {
+  const box = balao && balao.querySelector('.practice-result');
+  if (!box) return;
+  box.className = 'practice-result ' + tipo;
+  box.innerHTML = html;
+  box.hidden = false;
+}
+
+// Envia o treino de um balão para /api/praticar. Nunca toca na cena, no placar ou no histórico.
+async function sendPractice(blob, alvo) {
+  state.busy = true;
+  state.praticando = alvo;
+  setMicState('busy');
+  setHint('Avaliando sua pronúncia do balão…');
+  showPracticeResult(alvo.balao, 'wait', 'Avaliando…');
+  try {
+    const { data, mimeType } = await prepareAudio(blob);
+    let resp;
+    try {
+      resp = await fetch('/api/praticar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ frase: alvo.frase, audio: data, mimeType })
+      });
+    } catch {
+      throw new Error('Sem internet. Conecte e tente de novo.');
+    }
+    const r = await resp.json().catch(() => null);
+    console.log('[praticar] resposta bruta', resp.status, r);
+    if (!resp.ok || !r) throw new Error((r && r.erro) || `Erro no servidor (${resp.status}).`);
+
+    if (r.acertou) {
+      showPracticeResult(alvo.balao, 'ok', `✅ ${esc(r.feedback || 'Boa!')}`);
+    } else {
+      const palavras = r.palavrasErradas || [];
+      showPracticeResult(alvo.balao, 'err', `
+        <div>🔁 ${esc(r.feedback || 'Quase! Tenta de novo.')}</div>
+        ${palavras.length ? `<div class="wrong-words">${palavras.map((p) => `<span class="wrong-word">${esc(p)}</span>`).join('')}</div>` : ''}
+        ${r.macete ? `<div class="trick">💡 ${formatMacete(r.macete)}</div>` : ''}
+        ${r.transcricao ? `<div class="practice-heard">Ouvi: “${esc(r.transcricao)}”</div>` : ''}`);
+    }
+  } catch (err) {
+    showPracticeResult(alvo.balao, 'erro', '⚠️ ' + esc(err.message || 'Não consegui avaliar agora. Tenta de novo.'));
+  } finally {
+    state.busy = false;
+    state.praticando = null;
+    setMicState('idle');
+    setHint(state.ended ? 'Cena concluída' : 'Toque para gravar');
+  }
+}
+
+let speakSeq = 0;
+function speakFromBubble(frase, rate, btn) {
+  stopSpeaking();
+  const id = ++speakSeq;
+  btn.dataset.speakId = id;
+  btn.classList.add('speaking');
+  speak(frase, { rate }).then(() => {
+    if (btn.dataset.speakId === String(id)) btn.classList.remove('speaking');
+  });
+}
+
+// Fileira de botões de treino embaixo da frase em inglês de um balão.
+function practiceBar(frase) {
+  return `
+    <div class="bubble-actions" data-frase="${esc(frase)}">
+      <button type="button" class="act-btn" data-act="ouvir" aria-label="Ouvir a frase">🔊 Ouvir</button>
+      <button type="button" class="act-btn" data-act="devagar" aria-label="Ouvir devagar">🐢 Devagar</button>
+      <button type="button" class="act-btn" data-act="falar" aria-label="Gravar e treinar esta frase">🎤 Falar</button>
+    </div>
+    <div class="practice-result" hidden></div>`;
+}
+
+// Um único listener para os botões de todos os balões, inclusive os antigos.
+function onThreadClick(e) {
+  const btn = e.target.closest('.act-btn');
+  if (!btn || btn.disabled) return;
+  const frase = btn.closest('.bubble-actions').dataset.frase;
+  const balao = btn.closest('.bubble, .target');
+  const act = btn.dataset.act;
+
+  if (act === 'ouvir') return speakFromBubble(frase, 0.9, btn);
+  if (act === 'devagar') return speakFromBubble(frase, SLOW_RATE, btn);
+  if (act === 'falar') {
+    // O cartão "Sua vez de falar" atual segue o fluxo normal da cena, igual ao microfone grande.
+    const atual = balao === state.targetEl && !balao.classList.contains('done');
+    if (atual) return toggleMic(btn);
+    return togglePractice(frase, balao, btn);
+  }
 }
 
 async function sendToTutor(blob) {
@@ -952,7 +1075,8 @@ function stopTeacherMic(cancelar) {
 }
 
 /* ================= Eventos ================= */
-$('btnMic').addEventListener('click', toggleMic);
+$('btnMic').addEventListener('click', () => toggleMic());
+$('thread').addEventListener('click', onThreadClick);
 $('btnListen').addEventListener('click', () => speakTurn());
 $('btnSlow').addEventListener('click', () => speakTurn({ withCharacter: false, slow: true }));
 $('btnSkip').addEventListener('click', skipPhrase);
