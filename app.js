@@ -19,6 +19,11 @@ const SCENARIOS = [
       frase: 'Can I have a latte, please?',
       traducao: 'Pode me ver um latte, por favor?',
       chunk: 'Can I have a + [item], please?'
+    },
+    aberturaLivre: {
+      falaPersonagem: "Here's your latte! Is this your first time in New York?",
+      traducao: 'Aqui está seu latte! É sua primeira vez em Nova York?',
+      chunks: ["Yes, it's my first time.", "No, I've been here before.", "Yes, I'm here on vacation."]
     }
   },
   {
@@ -34,6 +39,11 @@ const SCENARIOS = [
       frase: 'Hi, I have a reservation for tonight.',
       traducao: 'Oi, eu tenho uma reserva para hoje à noite.',
       chunk: 'I have a reservation for + [quando]'
+    },
+    aberturaLivre: {
+      falaPersonagem: "Here's your room key. Is this your first time in Miami?",
+      traducao: 'Aqui está a chave do seu quarto. É sua primeira vez em Miami?',
+      chunks: ["Yes, it's my first time.", 'No, I came here last year.', "Yes, and I'm very excited!"]
     }
   },
   {
@@ -49,6 +59,11 @@ const SCENARIOS = [
       frase: "I'm here on vacation.",
       traducao: 'Estou aqui de férias.',
       chunk: "I'm here on + [motivo]"
+    },
+    aberturaLivre: {
+      falaPersonagem: "Okay, you're all set. Is this your first trip to the United States?",
+      traducao: 'Certo, está tudo pronto. É sua primeira viagem aos Estados Unidos?',
+      chunks: ["Yes, it's my first trip.", 'No, I came here a few years ago.', "Yes, and I'm very excited."]
     }
   },
   {
@@ -64,6 +79,11 @@ const SCENARIOS = [
       frase: 'Hi everyone, nice to meet you all.',
       traducao: 'Oi pessoal, prazer conhecer vocês.',
       chunk: 'Nice to meet + [quem]'
+    },
+    aberturaLivre: {
+      falaPersonagem: 'Great to have you on the team! What do you like to do on weekends?',
+      traducao: 'Que bom ter você no time! O que você gosta de fazer nos fins de semana?',
+      chunks: ['I like to play soccer.', 'I like to watch movies.', 'I spend time with my family.']
     }
   }
 ];
@@ -72,6 +92,8 @@ const STORAGE_KEY = 'evt_historico_v1';
 const MAX_REC_MS = 15000;
 const MIN_REC_MS = 600;
 const SLOW_RATE = 0.55; // velocidade de todos os botões 🐢
+const MAX_LIVRE_TURNOS = 10; // teto de falas do aluno por conversa livre
+const MAX_LIVRE_MSGS = 6;    // mensagens da conversa livre enviadas ao Gemini
 
 /* ================= Estado ================= */
 const state = {
@@ -88,6 +110,8 @@ const state = {
   ultimaFala: false,   // o Gemini avisou que esta é a fala de despedida
   ended: false,
   praticando: null,    // treino de balão aguardando o Gemini: { frase, balao, btn }
+  modo: 'guiado',      // 'guiado' (a cena normal) | 'livre' (conversa livre depois da cena)
+  livre: null,         // estado da conversa livre (ver startFreeTalk)
   myAudioUrl: null
 };
 
@@ -185,6 +209,7 @@ async function speakTurn({ withCharacter = true, slow = false } = {}) {
 function startScenario(sc) {
   cleanupRecording();
   stopSpeaking();
+  resetFreeTalk();
   state.scenario = sc;
   state.turn = null;
   state.ultimoTurnoValido = null;
@@ -326,12 +351,15 @@ function setHint(text) {
 function setMicState(mode) {
   // Treino de balão: o microfone grande fica desativado, sem aparência de gravando.
   const treino = !!((state.rec && state.rec.alvo.modo === 'treino') || state.praticando);
+  // Conversa livre: o fim da cena guiada não trava os botões; o que trava é o teto ou a espera do 429.
+  const livre = state.modo === 'livre';
+  const travado = livre ? freeTalkLocked() : state.ended;
   const btn = $('btnMic');
   btn.classList.toggle('recording', mode === 'recording' && !treino);
   btn.classList.toggle('busy', mode === 'busy' && !treino);
-  btn.disabled = mode === 'busy' || state.ended || treino;
+  btn.disabled = mode === 'busy' || travado || treino;
   btn.setAttribute('aria-label', mode === 'recording' && !treino ? 'Parar gravação' : 'Gravar');
-  ['btnListen', 'btnSlow', 'btnSkip', 'btnTeacher'].forEach((id) => { $(id).disabled = mode !== 'idle' || state.ended; });
+  ['btnListen', 'btnSlow', 'btnSkip', 'btnTeacher'].forEach((id) => { $(id).disabled = mode !== 'idle' || (livre ? false : state.ended); });
   syncBubbleButtons(mode);
 }
 
@@ -429,6 +457,15 @@ function endScene() {
   saveSession();
   stopSpeaking();
 
+  appendEndCard();
+  setMicState('idle');
+  setHint('Cena concluída');
+  scrollToBottom();
+  speak('Great job!');
+}
+
+// Cartão de fim da cena guiada (também volta a aparecer quando a conversa livre é encerrada).
+function appendEndCard() {
   const s = state.session;
   const card = document.createElement('div');
   card.className = 'end-card';
@@ -436,21 +473,20 @@ function endScene() {
     <h2>🎉 Cena concluída!</h2>
     <div>Você acertou ${s.acertos} de ${s.tentativas} tentativas.</div>
     <div class="end-actions">
-      <button class="btn primary" type="button" data-act="again">Repetir cena</button>
+      <button class="btn primary" type="button" data-act="free">💬 Continuar conversando</button>
+      <button class="btn" type="button" data-act="again">Repetir cena</button>
       <button class="btn" type="button" data-act="home">Outras cenas</button>
     </div>`;
+  card.querySelector('[data-act="free"]').addEventListener('click', startFreeTalk);
   card.querySelector('[data-act="again"]').addEventListener('click', () => startScenario(state.scenario));
   card.querySelector('[data-act="home"]').addEventListener('click', goHome);
   $('thread').appendChild(card);
-  setMicState('idle');
-  setHint('Cena concluída');
-  scrollToBottom();
-  speak('Great job!');
 }
 
 function goHome() {
   cleanupRecording();
   stopSpeaking();
+  resetFreeTalk();
   state.turn = null;
   show('home');
 }
@@ -464,6 +500,7 @@ function pickMime() {
 
 // Fluxo normal da cena. btn = o 🎤 do cartão "Sua vez de falar", quando veio de lá (só para destacar).
 async function toggleMic(btn) {
+  if (state.modo === 'livre') return toggleFreeMic();
   if (state.busy || state.ended) return;
   if (state.rec) return stopRecording();
   return startRecording({ modo: 'cena', btn: btn || null });
@@ -550,12 +587,13 @@ async function processRecording(rec) {
   const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || rec.mime || 'audio/webm' });
   if (rec.duration < MIN_REC_MS || !blob.size) {
     setMicState('idle');
-    setHint(state.ended ? 'Cena concluída' : 'Muito curto. Segure a frase inteira e toque para parar.');
+    setHint(state.ended && state.modo !== 'livre' ? 'Cena concluída' : 'Muito curto. Segure a frase inteira e toque para parar.');
     if (rec.alvo.modo === 'treino') showPracticeResult(rec.alvo.balao, 'erro', '⚠️ Muito curto. Fala a frase inteira e toca no 🎤 para parar.');
     return;
   }
   setMyAudio(blob);
   if (rec.alvo.modo === 'treino') return sendPractice(blob, rec.alvo);
+  if (rec.alvo.modo === 'livre') return sendFreeTurn(blob);
   await sendToTutor(blob);
 }
 
@@ -606,7 +644,7 @@ async function sendPractice(blob, alvo) {
     state.busy = false;
     state.praticando = null;
     setMicState('idle');
-    setHint(state.ended ? 'Cena concluída' : 'Toque para gravar');
+    if (!freeTalkWaiting()) setHint(idleHint());
   }
 }
 
@@ -855,10 +893,273 @@ function renderHistory() {
         <span>${sc.emoji} ${esc(sc.nome)} ${s.concluida ? '✅' : ''}</span>
         <span class="history-date">${esc(data)}</span>
       </div>
-      <div class="history-meta">${s.acertos || 0} acertos em ${s.tentativas || 0} tentativas · ${s.falas || 0} falas</div>
+      <div class="history-meta">${s.acertos || 0} acertos em ${s.tentativas || 0} tentativas · ${s.falas || 0} falas${s.livreTurnos ? ` · 💬 ${s.livreTurnos} na conversa livre` : ''}</div>
       ${palavras.length ? `<div class="history-words">${palavras.map((p) => `<span>${esc(p)}</span>`).join('')}</div>` : ''}`;
     ul.appendChild(li);
   });
+}
+
+/* ================= Conversa livre ================= */
+// Depois da cena guiada, o aluno conversa à vontade com o personagem do mesmo cenário (/api/conversa).
+
+function resetFreeTalk() {
+  if (state.livre) clearInterval(state.livre.timer);
+  state.modo = 'guiado';
+  state.livre = null;
+  setFreeDock(false);
+}
+
+// Microfone grande travado no modo livre: depois do teto/encerramento ou durante a espera do 429.
+function freeTalkLocked() {
+  const L = state.livre;
+  return !L || L.encerrada || freeTalkWaiting();
+}
+
+function freeTalkWaiting() {
+  const L = state.livre;
+  return !!(state.modo === 'livre' && L && L.esperaAte > Date.now());
+}
+
+function idleHint() {
+  if (state.modo === 'livre') return state.livre && state.livre.encerrada ? 'Conversa encerrada' : 'Toque no microfone e fale o que quiser';
+  return state.ended ? 'Cena concluída' : 'Toque para gravar';
+}
+
+// No modo livre o Pular some e aparece "Encerrar conversa"; ao sair, tudo volta como era.
+function setFreeDock(on) {
+  $('btnSkip').hidden = on;
+  let end = $('btnEndFree');
+  if (on && !end) {
+    end = document.createElement('button');
+    end.id = 'btnEndFree';
+    end.type = 'button';
+    end.className = 'pill-btn';
+    end.textContent = '🏁 Encerrar conversa';
+    end.addEventListener('click', finishFreeTalk);
+    $('btnSkip').after(end);
+  } else if (!on && end) {
+    end.remove();
+  }
+}
+
+function startFreeTalk() {
+  if (state.rec || state.busy || state.modo === 'livre' || !state.scenario) return;
+  const ab = state.scenario.aberturaLivre;
+  if (!ab) return;
+  stopSpeaking();
+  state.modo = 'livre';
+  state.livre = {
+    mensagens: [],        // [{ autor: 'personagem' | 'aluno', texto }]
+    turnos: 0,
+    ultimaFala: null,     // { texto, traducao } — o que o 🔊 de baixo repete e o professor recebe
+    correcoes: [],        // [{ de, para }] para o resumo
+    chunksEl: null,
+    esperaAte: 0,
+    timer: null,
+    encerrada: false,
+    resumoMostrado: false
+  };
+  state.session.livreTurnos = 0;
+  setFreeDock(true);
+  addBubble('scene', `💬 Conversa livre com ${esc(state.scenario.personagem.toLowerCase())}: fale o que quiser, eu respondo e corrijo de leve. Até ${MAX_LIVRE_TURNOS} falas.`);
+  presentFreeTurn({ resposta: ab.falaPersonagem, traducao: ab.traducao, chunksSugeridos: ab.chunks });
+  setMicState('idle');
+  setHint(idleHint());
+}
+
+// Balão do personagem + sugestões para se travar. As sugestões antigas ficam recolhidas.
+function presentFreeTurn(r) {
+  const L = state.livre;
+  addBubble('character free', `
+    <div class="speaker">${esc(state.scenario.personagem)}</div>
+    <div class="en">${esc(r.resposta)}</div>
+    <div class="pt">${esc(r.traducao)}</div>
+    ${practiceBar(r.resposta)}`);
+  L.ultimaFala = { texto: r.resposta, traducao: r.traducao };
+  L.mensagens.push({ autor: 'personagem', texto: r.resposta });
+
+  const chunks = r.chunksSugeridos || [];
+  if (chunks.length) {
+    if (L.chunksEl) L.chunksEl.open = false;
+    const box = document.createElement('details');
+    box.className = 'free-chunks';
+    box.open = true;
+    box.innerHTML = `
+      <summary>💡 Se travar: ${chunks.length} sugestões</summary>
+      ${chunks.map((c) => `<div class="bubble free-chunk"><div class="en">${esc(c)}</div>${practiceBar(c)}</div>`).join('')}`;
+    $('thread').appendChild(box);
+    L.chunksEl = box;
+  }
+  scrollToBottom();
+  speakFreeLast(0.95);
+}
+
+function speakFreeLast(rate) {
+  const f = state.livre && state.livre.ultimaFala;
+  if (!f) return;
+  stopSpeaking();
+  speak(f.texto, { rate, pitch: 1.15 });
+}
+
+function toggleFreeMic() {
+  if (state.rec) return state.rec.alvo.modo === 'livre' ? stopRecording() : undefined;
+  if (state.busy || freeTalkLocked()) return;
+  return startRecording({ modo: 'livre', btn: null });
+}
+
+async function sendFreeTurn(blob) {
+  state.busy = true;
+  setMicState('busy');
+  setHint(`${state.scenario.personagem} está ouvindo…`);
+  try {
+    const { data, mimeType } = await prepareAudio(blob);
+    let resp;
+    try {
+      resp = await fetch('/api/conversa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cenario: state.scenario.contexto,
+          personagem: state.scenario.personagem,
+          resumoCena: state.historico.slice(-3),
+          mensagens: state.livre.mensagens.slice(-MAX_LIVRE_MSGS),
+          audio: data,
+          mimeType
+        })
+      });
+    } catch {
+      throw new Error('Sem internet. Conecte e tente de novo.');
+    }
+    const r = await resp.json().catch(() => null);
+    console.log('[conversa] resposta bruta', resp.status, r);
+    if (resp.status === 429) return startFreeCooldown(r && r.espera, r && r.erro);
+    if (!resp.ok || !r) throw new Error((r && r.erro) || `Erro no servidor (${resp.status}).`);
+    handleFreeResult(r);
+  } catch (err) {
+    addBubble('error', '⚠️ ' + esc(err.message || 'Algo deu errado. Fala de novo.'));
+  } finally {
+    state.busy = false;
+    setMicState('idle');
+    if (!freeTalkWaiting()) setHint(idleHint());
+  }
+}
+
+function handleFreeResult(r) {
+  const L = state.livre;
+  if (!L) return;
+
+  // Áudio mudo: o personagem pede para repetir e o turno não avança.
+  if (r.naoOuvi) {
+    addBubble('me', '🗣️ Ouvi: <em>(nada)</em>');
+    addBubble('character free', `<div class="speaker">${esc(state.scenario.personagem)}</div><div class="en">${esc(r.resposta)}</div><div class="pt">${esc(r.traducao)}</div>`);
+    stopSpeaking();
+    speak(r.resposta, { rate: 0.95, pitch: 1.15 });
+    return;
+  }
+
+  const palavras = r.palavrasErradas || [];
+  const feedback = [];
+  if (r.maisNatural) {
+    feedback.push(`<div>✏️ Mais natural: <strong>“${esc(r.maisNatural)}”</strong></div>`);
+    if (r.padrao) feedback.push(`<div class="free-padrao">${esc(r.padrao)}</div>`);
+    L.correcoes.push({ de: r.transcricao, para: r.maisNatural });
+  }
+  if (palavras.length) feedback.push(`<div>🔴 Pronúncia: <span class="wrong-word">${esc(palavras[0])}</span></div>`);
+  if (r.macete) feedback.push(`<div>💡 ${formatMacete(r.macete)}</div>`);
+  addBubble('me free-me', `
+    <div>🗣️ Ouvi: “${esc(r.transcricao)}”</div>
+    ${feedback.length ? `<div class="free-feedback">${feedback.join('')}</div>` : ''}
+    ${r.maisNatural ? practiceBar(r.maisNatural) : ''}`);
+
+  L.mensagens.push({ autor: 'aluno', texto: r.transcricao });
+  L.turnos++;
+  state.session.livreTurnos = L.turnos;
+  saveSession();
+
+  presentFreeTurn(r);
+  // O professor recebe a palavra e o macete ligados à fala atual do personagem.
+  if (palavras.length) teacher.ultimoErro = { palavra: palavras[0], frase: L.ultimaFala.texto };
+  if (r.macete) teacher.ultimoMacete = { texto: r.macete, frase: L.ultimaFala.texto };
+
+  if (L.turnos >= MAX_LIVRE_TURNOS) showFreeLimit();
+}
+
+// 429: o turno não avança e o microfone grande fica parado com contagem regressiva.
+function startFreeCooldown(segundos, msg) {
+  const L = state.livre;
+  if (!L) return;
+  const s = Math.max(5, Math.min(120, Math.round(Number(segundos)) || 30));
+  addBubble('error', `⏳ ${esc(msg || 'Muitas falas seguidas. Espera um pouquinho e fala de novo.')}`);
+  L.esperaAte = Date.now() + s * 1000;
+  clearInterval(L.timer);
+  const tick = () => {
+    if (state.livre !== L) return clearInterval(L.timer);
+    const resta = Math.ceil((L.esperaAte - Date.now()) / 1000);
+    if (resta <= 0) {
+      clearInterval(L.timer);
+      L.esperaAte = 0;
+      if (!state.busy && !state.rec) {
+        setMicState('idle');
+        setHint(idleHint());
+      }
+      return;
+    }
+    if (!state.rec) setHint(`⏳ Espera ${resta}s para falar de novo`);
+  };
+  tick();
+  L.timer = setInterval(tick, 500);
+}
+
+function freeSummaryHtml() {
+  const L = state.livre;
+  const lista = L.correcoes.length
+    ? `<div class="free-review"><div>Para revisar:</div>${L.correcoes.map((c) => `
+        <div class="bubble free-chunk">
+          <div class="free-de">“${esc(c.de)}”</div>
+          <div class="en">→ ${esc(c.para)}</div>
+          ${practiceBar(c.para)}
+        </div>`).join('')}</div>`
+    : '<div>Nenhuma correção: mandou bem! 🎯</div>';
+  return `<div>Você falou ${L.turnos} ${L.turnos === 1 ? 'vez' : 'vezes'} nesta conversa.</div>${lista}`;
+}
+
+// Teto de falas: mostra o resumo e o botão para encerrar.
+function showFreeLimit() {
+  const L = state.livre;
+  L.encerrada = true;
+  L.resumoMostrado = true;
+  clearInterval(L.timer);
+  L.esperaAte = 0;
+  const card = document.createElement('div');
+  card.className = 'end-card free-summary';
+  card.innerHTML = `
+    <h2>💬 Você chegou a ${MAX_LIVRE_TURNOS} falas!</h2>
+    ${freeSummaryHtml()}
+    <div class="end-actions"><button class="btn primary" type="button" data-act="end-free">🏁 Encerrar conversa</button></div>`;
+  card.querySelector('[data-act="end-free"]').addEventListener('click', finishFreeTalk);
+  $('thread').appendChild(card);
+  setMicState('idle');
+  setHint(idleHint());
+  scrollToBottom();
+}
+
+// Encerra a conversa livre e volta ao modo guiado, com o cartão de fim da cena.
+function finishFreeTalk() {
+  const L = state.livre;
+  if (!L || state.rec || state.busy) return;
+  stopSpeaking();
+  if (!L.resumoMostrado) {
+    const card = document.createElement('div');
+    card.className = 'end-card free-summary';
+    card.innerHTML = `<h2>💬 Conversa encerrada</h2>${freeSummaryHtml()}`;
+    $('thread').appendChild(card);
+  }
+  saveSession();
+  resetFreeTalk();
+  appendEndCard();
+  setMicState('idle');
+  setHint(idleHint());
+  scrollToBottom();
 }
 
 /* ================= Chat com o professor ================= */
@@ -890,10 +1191,19 @@ function rememberForTeacher(r) {
   if (r.macete) teacher.ultimoMacete = { texto: r.macete, frase };
 }
 
+// Frase que o professor usa como contexto: a frase atual da cena ou, na conversa livre, a última fala do personagem.
+function teacherTurn() {
+  if (state.modo === 'livre') {
+    const f = state.livre && state.livre.ultimaFala;
+    return f ? { frase: f.texto, traducao: f.traducao, chunk: '' } : null;
+  }
+  return state.turn;
+}
+
 function openTeacher() {
-  if (!state.turn || state.rec || state.busy) return;
+  if (!teacherTurn() || state.rec || state.busy) return;
   stopSpeaking();
-  const t = state.turn;
+  const t = teacherTurn();
   $('teacherContext').innerHTML = `Frase atual: <strong>${esc(t.frase)}</strong>`;
   if (!$('teacherMessages').children.length) {
     addTeacherBubble('professor', `Oi! Me pergunta qualquer coisa sobre a frase “${t.frase}”. Pode digitar${SpeechRec ? ', falar no microfone' : ''} ou tocar num atalho.`);
@@ -971,7 +1281,7 @@ function setTeacherSending(on) {
 
 async function sendTeacher(textoAluno) {
   const pergunta = String(textoAluno || '').trim();
-  if (!pergunta || teacher.enviando || !state.turn) return;
+  if (!pergunta || teacher.enviando || !teacherTurn()) return;
 
   stopSpeaking();
   $('teacherInput').value = '';
@@ -981,7 +1291,7 @@ async function sendTeacher(textoAluno) {
   digitando.classList.add('typing');
   setTeacherSending(true);
 
-  const t = state.turn;
+  const t = teacherTurn();
   const erro = teacher.ultimoErro && teacher.ultimoErro.frase === t.frase ? teacher.ultimoErro.palavra : '';
   const macete = teacher.ultimoMacete && teacher.ultimoMacete.frase === t.frase ? teacher.ultimoMacete.texto : '';
 
@@ -1077,8 +1387,8 @@ function stopTeacherMic(cancelar) {
 /* ================= Eventos ================= */
 $('btnMic').addEventListener('click', () => toggleMic());
 $('thread').addEventListener('click', onThreadClick);
-$('btnListen').addEventListener('click', () => speakTurn());
-$('btnSlow').addEventListener('click', () => speakTurn({ withCharacter: false, slow: true }));
+$('btnListen').addEventListener('click', () => (state.modo === 'livre' ? speakFreeLast(0.95) : speakTurn()));
+$('btnSlow').addEventListener('click', () => (state.modo === 'livre' ? speakFreeLast(SLOW_RATE) : speakTurn({ withCharacter: false, slow: true })));
 $('btnSkip').addEventListener('click', skipPhrase);
 $('btnMine').addEventListener('click', () => {
   if (!state.myAudioUrl) return;
