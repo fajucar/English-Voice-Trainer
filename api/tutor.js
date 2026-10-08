@@ -47,7 +47,9 @@ COMO CONTINUAR A HISTÓRIA
   - "falaPersonagem": o que o outro personagem diz agora, em inglês simples e curto.
   - "proximaFala": a próxima frase que o ALUNO deve dizer, em inglês, natural e curta (3 a 10 palavras), útil na vida real, respondendo ao personagem.
   - "traducao": tradução natural da proximaFala para o português do Brasil.
-  - "chunk": o pedaço reaproveitável da proximaFala no formato "parte fixa + [o que muda]", ex.: "Can I have a + [item]" ou "I'd like to + [ação]". A parte fixa deve aparecer igualzinha dentro da proximaFala.
+  - "chunk": o pedaço reaproveitável da proximaFala. SEMPRE no formato "bloco fixo + [parte variável]", com o sinal de + antes de cada parte variável entre colchetes, e o bloco fixo (as palavras fora dos colchetes) com pelo menos 2 palavras. A parte fixa deve aparecer igualzinha dentro da proximaFala.
+    Certo: "Can I have a + [item], please?" | "A + [tamanho] + [item], please?" | "I'd like to + [ação]"
+    Errado: "A [tamanho] [item], please." (sem o +)
   - Reaproveite chunks que já apareceram quando fizer sentido, para fixar.
 - Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "".
 - "fimDaCena": true somente quando a história chegar a um final natural (normalmente depois de 6 a 8 falas do aluno). Nesse caso, falaPersonagem é a despedida do personagem, cena fecha a história em português, e proximaFala é uma despedida curta do aluno (ex.: "Thank you, have a nice day!").
@@ -163,6 +165,16 @@ function validar(r, entrada) {
   if (compactar(p) === compactar(r.traducao)) return 'proximaFala veio igual à traducao';
   if (parecePortugues(p)) return 'proximaFala não está em inglês';
   if (!r.traducao) return 'traducao veio vazia';
+  const problemaChunk = validarChunk(r.chunk);
+  if (problemaChunk) return problemaChunk;
+  return '';
+}
+
+// O chunk precisa do "+" e de um bloco fixo (palavras fora dos colchetes) com pelo menos 2 palavras.
+function validarChunk(chunk) {
+  if (!chunk || !chunk.includes('+')) return 'o chunk veio sem o sinal de + (formato: "bloco fixo + [parte variável]")';
+  const fixas = chunk.replace(/\[[^\]]*\]/g, ' ').replace(/\+/g, ' ').split(/\s+/).filter((w) => /[a-z]/i.test(w));
+  if (fixas.length < 2) return 'o bloco fixo do chunk tem menos de 2 palavras';
   return '';
 }
 
