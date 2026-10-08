@@ -2,7 +2,7 @@
 // para avaliar a pronúncia e continuar a conversa do cenário.
 // A chave fica SOMENTE na variável de ambiente GEMINI_API_KEY.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const MAX_AUDIO_BASE64 = 3500000; // ~2,6 MB de áudio (limite da Vercel é 4,5 MB por requisição)
 const TIMEOUT_MS = 18000;     // primeira chamada ao Gemini
@@ -166,7 +166,34 @@ function validar(r, entrada) {
   return '';
 }
 
-// Chama o Gemini uma vez. Devolve { erroHttp } ou { bruto, json } (json = null se veio vazio/quebrado).
+// Ajusta o "pensamento" e a temperatura ao modelo, conforme a documentação do Gemini.
+function configModelo(model, temperatura) {
+  if (/^gemini-2\.5-flash/.test(model)) {
+    return { temperature: temperatura, thinkingConfig: { thinkingBudget: 0 } };
+  }
+  if (/^gemini-([3-9]|\d{2,})/.test(model)) {
+    // Gemini 3+: usa thinkingLevel (mandar thinkingBudget junto dá erro 400).
+    // A temperatura fica no padrão (1.0), como a documentação recomenda para o Gemini 3.
+    return { thinkingConfig: { thinkingLevel: /flash/.test(model) ? 'MINIMAL' : 'LOW' } };
+  }
+  return { temperature: temperatura };
+}
+
+// Extrai a mensagem de erro que o Gemini devolveu, sem nunca incluir a chave.
+function mensagemErroGemini(detalhe, apiKey) {
+  let msg = '';
+  try {
+    const j = JSON.parse(detalhe);
+    msg = (j.error && (j.error.message || j.error.status)) || '';
+  } catch {
+    msg = detalhe;
+  }
+  msg = String(msg || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (apiKey) msg = msg.split(apiKey).join('***');
+  return msg || 'sem mensagem';
+}
+
+// Chama o Gemini uma vez. Devolve { erroHttp, erroMsg } ou { bruto, json } (json = null se veio vazio/quebrado).
 async function chamarGemini(payload, apiKey, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -180,8 +207,9 @@ async function chamarGemini(payload, apiKey, timeoutMs) {
 
     if (!resp.ok) {
       const detalhe = await resp.text().catch(() => '');
-      console.error('Gemini erro', resp.status, detalhe.slice(0, 500));
-      return { erroHttp: resp.status };
+      const erroMsg = mensagemErroGemini(detalhe, apiKey);
+      console.error(`[tutor] Gemini erro ${resp.status} (modelo ${MODEL}): ${erroMsg}`);
+      return { erroHttp: resp.status, erroMsg };
     }
 
     const data = await resp.json();
@@ -246,10 +274,8 @@ module.exports = async function handler(req, res) {
   const generationConfig = {
     responseMimeType: 'application/json',
     responseSchema: RESPONSE_SCHEMA,
-    temperature: 0.4
+    ...configModelo(MODEL, 0.4)
   };
-  // Nos modelos 2.5 o "pensamento" só deixa a resposta mais lenta aqui.
-  if (/2\.5-flash/.test(MODEL)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
 
   const parts = [{ text: montarContexto(entrada) }];
   if (!pular) parts.push({ inlineData: { mimeType, data: audio } });
@@ -273,10 +299,12 @@ module.exports = async function handler(req, res) {
   }
 
   if (primeira.erroHttp) {
-    if (primeira.erroHttp === 429) {
-      return res.status(429).json({ erro: 'Limite gratuito do Gemini atingido. Espere um minuto e tente de novo.' });
+    const { erroHttp, erroMsg } = primeira;
+    const detalhes = { geminiStatus: erroHttp, geminiMensagem: erroMsg };
+    if (erroHttp === 429) {
+      return res.status(429).json({ erro: `Limite gratuito do Gemini atingido. Espere um minuto e tente de novo. (429: ${erroMsg})`, ...detalhes });
     }
-    return res.status(502).json({ erro: `O Gemini respondeu com erro (${primeira.erroHttp}).` });
+    return res.status(502).json({ erro: `O Gemini respondeu com erro ${erroHttp}: ${erroMsg}`, ...detalhes });
   }
 
   let resultado = primeira.json ? normalizar(primeira.json, entrada) : null;

@@ -1,7 +1,7 @@
 // Função serverless da Vercel: chat com o professor, dentro da cena.
 // Separada do api/tutor.js. A chave fica SOMENTE na variável de ambiente GEMINI_API_KEY.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const TIMEOUT_MS = 18000;     // primeira chamada ao Gemini (mesmo limite do tutor)
 const TEMPO_TOTAL_MS = 27000; // somando a nova tentativa (a função tem 30 s na Vercel)
@@ -108,7 +108,34 @@ function normalizar(r) {
   return { resposta: texto(r.resposta, 1200), falar };
 }
 
-// Chama o Gemini uma vez. Devolve { erroHttp } ou { bruto, json } (json = null se veio vazio/quebrado).
+// Ajusta o "pensamento" e a temperatura ao modelo, conforme a documentação do Gemini.
+function configModelo(model, temperatura) {
+  if (/^gemini-2\.5-flash/.test(model)) {
+    return { temperature: temperatura, thinkingConfig: { thinkingBudget: 0 } };
+  }
+  if (/^gemini-([3-9]|\d{2,})/.test(model)) {
+    // Gemini 3+: usa thinkingLevel (mandar thinkingBudget junto dá erro 400).
+    // A temperatura fica no padrão (1.0), como a documentação recomenda para o Gemini 3.
+    return { thinkingConfig: { thinkingLevel: /flash/.test(model) ? 'MINIMAL' : 'LOW' } };
+  }
+  return { temperature: temperatura };
+}
+
+// Extrai a mensagem de erro que o Gemini devolveu, sem nunca incluir a chave.
+function mensagemErroGemini(detalhe, apiKey) {
+  let msg = '';
+  try {
+    const j = JSON.parse(detalhe);
+    msg = (j.error && (j.error.message || j.error.status)) || '';
+  } catch {
+    msg = detalhe;
+  }
+  msg = String(msg || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (apiKey) msg = msg.split(apiKey).join('***');
+  return msg || 'sem mensagem';
+}
+
+// Chama o Gemini uma vez. Devolve { erroHttp, erroMsg } ou { bruto, json } (json = null se veio vazio/quebrado).
 async function chamarGemini(payload, apiKey, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -122,8 +149,9 @@ async function chamarGemini(payload, apiKey, timeoutMs) {
 
     if (!resp.ok) {
       const detalhe = await resp.text().catch(() => '');
-      console.error('[chat] Gemini erro', resp.status, detalhe.slice(0, 500));
-      return { erroHttp: resp.status };
+      const erroMsg = mensagemErroGemini(detalhe, apiKey);
+      console.error(`[chat] Gemini erro ${resp.status} (modelo ${MODEL}): ${erroMsg}`);
+      return { erroHttp: resp.status, erroMsg };
     }
 
     const data = await resp.json();
@@ -142,11 +170,12 @@ async function chamarGemini(payload, apiKey, timeoutMs) {
   }
 }
 
-function erroHttp(res, status) {
+function erroHttp(res, { erroHttp: status, erroMsg }) {
+  const detalhes = { geminiStatus: status, geminiMensagem: erroMsg };
   if (status === 429) {
-    return res.status(429).json({ erro: 'O professor atingiu o limite gratuito por agora. Espera um minutinho e pergunta de novo.' });
+    return res.status(429).json({ erro: `O professor atingiu o limite gratuito por agora. Espera um minutinho e pergunta de novo. (429: ${erroMsg})`, ...detalhes });
   }
-  return res.status(502).json({ erro: `O Gemini respondeu com erro (${status}).` });
+  return res.status(502).json({ erro: `O Gemini respondeu com erro ${status}: ${erroMsg}`, ...detalhes });
 }
 
 module.exports = async function handler(req, res) {
@@ -178,9 +207,8 @@ module.exports = async function handler(req, res) {
   const generationConfig = {
     responseMimeType: 'application/json',
     responseSchema: RESPONSE_SCHEMA,
-    temperature: 0.5
+    ...configModelo(MODEL, 0.5)
   };
-  if (/2\.5-flash/.test(MODEL)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
 
   const payload = {
     systemInstruction: { parts: [{ text: `${SYSTEM_PROMPT}\n\n${montarContexto(body)}` }] },
@@ -199,7 +227,7 @@ module.exports = async function handler(req, res) {
     console.error('[chat] falha ao chamar o Gemini', err);
     return res.status(500).json({ erro: 'Falha ao falar com o professor.' });
   }
-  if (primeira.erroHttp) return erroHttp(res, primeira.erroHttp);
+  if (primeira.erroHttp) return erroHttp(res, primeira);
 
   const r1 = primeira.json ? normalizar(primeira.json) : null;
   if (r1 && r1.resposta) return res.status(200).json(r1);
@@ -225,7 +253,7 @@ module.exports = async function handler(req, res) {
     };
     try {
       const segunda = await chamarGemini(payloadNovo, apiKey, restante);
-      if (segunda.erroHttp) return erroHttp(res, segunda.erroHttp);
+      if (segunda.erroHttp) return erroHttp(res, segunda);
       const r2 = segunda.json ? normalizar(segunda.json) : null;
       if (r2 && r2.resposta) return res.status(200).json(r2);
       console.error('[chat] resposta inválida (tentativa 2):', r2 ? 'o campo resposta veio vazio' : 'o JSON veio vazio ou quebrado');
