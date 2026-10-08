@@ -47,9 +47,10 @@ COMO CONTINUAR A HISTÓRIA
   - "falaPersonagem": o que o outro personagem diz agora, em inglês simples e curto.
   - "proximaFala": a próxima frase que o ALUNO deve dizer, em inglês, natural e curta (3 a 10 palavras), útil na vida real, respondendo ao personagem.
   - "traducao": tradução natural da proximaFala para o português do Brasil.
-  - "chunk": o pedaço reaproveitável da proximaFala. SEMPRE no formato "bloco fixo + [parte variável]", com o sinal de + antes de cada parte variável entre colchetes, e o bloco fixo (as palavras fora dos colchetes) com pelo menos 2 palavras. A parte fixa deve aparecer igualzinha dentro da proximaFala.
-    Certo: "Can I have a + [item], please?" | "A + [tamanho] + [item], please?" | "I'd like to + [ação]"
+  - "chunk": o pedaço reaproveitável da proximaFala. SEMPRE no formato "bloco fixo + [parte variável]", com o sinal de + antes de cada parte variável entre colchetes. O bloco fixo é o começo do chunk, ANTES do primeiro + ou [, e precisa ter pelo menos 2 palavras. A parte fixa deve aparecer igualzinha dentro da proximaFala.
+    Certo: "Can I have a + [item], please?" | "A medium + [item], please?" | "I'd like to + [ação]"
     Errado: "A [tamanho] [item], please." (sem o +)
+    Errado: "A + [tamanho] + [item], please?" (o bloco fixo antes do primeiro + tem só 1 palavra; precisa de pelo menos 2)
   - Reaproveite chunks que já apareceram quando fizer sentido, para fixar.
 - Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "".
 - "fimDaCena": true somente quando a história chegar a um final natural (normalmente depois de 6 a 8 falas do aluno). Nesse caso, falaPersonagem é a despedida do personagem, cena fecha a história em português, e proximaFala é uma despedida curta do aluno (ex.: "Thank you, have a nice day!").
@@ -170,11 +171,12 @@ function validar(r, entrada) {
   return '';
 }
 
-// O chunk precisa do "+" e de um bloco fixo (palavras fora dos colchetes) com pelo menos 2 palavras.
+// O chunk precisa do "+" e de um bloco fixo, antes do primeiro "+" ou "[", com pelo menos 2 palavras.
 function validarChunk(chunk) {
   if (!chunk || !chunk.includes('+')) return 'o chunk veio sem o sinal de + (formato: "bloco fixo + [parte variável]")';
-  const fixas = chunk.replace(/\[[^\]]*\]/g, ' ').replace(/\+/g, ' ').split(/\s+/).filter((w) => /[a-z]/i.test(w));
-  if (fixas.length < 2) return 'o bloco fixo do chunk tem menos de 2 palavras';
+  const bloco = chunk.split(/[+[]/)[0];
+  const palavras = bloco.split(/\s+/).filter((w) => /[a-z]/i.test(w));
+  if (palavras.length < 2) return 'o bloco fixo do chunk (antes do primeiro + ou [) tem menos de 2 palavras';
   return '';
 }
 
