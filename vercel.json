@@ -11,6 +11,9 @@
     },
     "api/praticar.js": {
       "maxDuration": 30
+    },
+    "api/conversa.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
