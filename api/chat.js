@@ -1,7 +1,7 @@
 // Função serverless da Vercel: chat com o professor, dentro da cena.
 // Separada do api/tutor.js. A chave fica SOMENTE na variável de ambiente GEMINI_API_KEY.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+const MODEL = process.env.GEMINI_MODEL_CHAT || process.env.GEMINI_MODEL ||'gemini-3-flash-preview';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const TIMEOUT_MS = 18000;     // primeira chamada ao Gemini (mesmo limite do tutor)
 const TEMPO_TOTAL_MS = 27000; // somando a nova tentativa (a função tem 30 s na Vercel)

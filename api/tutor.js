@@ -2,7 +2,7 @@
 // para avaliar a pronúncia e continuar a conversa do cenário.
 // A chave fica SOMENTE na variável de ambiente GEMINI_API_KEY.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+const MODEL = process.env.GEMINI_MODEL_TUTOR || process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const MAX_AUDIO_BASE64 = 3500000; // ~2,6 MB de áudio (limite da Vercel é 4,5 MB por requisição)
 const TIMEOUT_MS = 18000;     // primeira chamada ao Gemini
@@ -55,12 +55,24 @@ COMO CONTINUAR A HISTÓRIA
     Errado: "A [tamanho] [item], please." (sem o +)
     Errado: "A + [tamanho] + [item], please?" (o bloco fixo antes do primeiro + tem só 1 palavra; precisa de pelo menos 2)
   - Reaproveite chunks que já apareceram quando fizer sentido, para fixar.
-- Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "", traducaoPersonagem = "", blocosPersonagem = [].
+  - "blocos": a proximaFala dividida em 2 blocos, na ordem, cada um { "en": trecho em inglês, "pt": tradução daquele trecho }: o primeiro termina no fim do bloco fixo do chunk, o segundo é o resto. Se a frase tiver só um trecho natural, use 1 bloco. Juntando todos os "en" tem que dar exatamente a proximaFala, com as mesmas palavras na mesma ordem. "pt" nunca pode ficar vazio.
+    Ex.: proximaFala "Can I have a latte, please?" com chunk "Can I have a + [item], please?" → [{"en":"Can I have a","pt":"Posso pedir um"},{"en":"latte, please?","pt":"latte, por favor?"}]
+- Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "", traducaoPersonagem = "", blocosPersonagem = [], blocos = [].
 - "fimDaCena": true somente quando a história chegar a um final natural (normalmente depois de 6 a 8 falas do aluno). Nesse caso, falaPersonagem é a despedida do personagem, cena fecha a história em português, e proximaFala é uma despedida curta do aluno (ex.: "Thank you, have a nice day!").
 - REGRA FIRME: proximaFala é obrigatória em todo turno em que acertou:true, exceto quando ultimaFala for true (o contexto avisa com "ÚLTIMA FALA DA CENA: sim"). Nunca devolva proximaFala vazia, nunca repita a fala do personagem nela, e ela deve sempre estar em inglês, com a tradução em português no campo traducao.
 
 Responda SOMENTE com o JSON no formato pedido.
 `.trim();
+
+const SCHEMA_BLOCOS = {
+  type: 'ARRAY',
+  items: {
+    type: 'OBJECT',
+    properties: { en: { type: 'STRING' }, pt: { type: 'STRING' } },
+    required: ['en', 'pt'],
+    propertyOrdering: ['en', 'pt']
+  }
+};
 
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -73,29 +85,22 @@ const RESPONSE_SCHEMA = {
     cena: { type: 'STRING' },
     falaPersonagem: { type: 'STRING' },
     traducaoPersonagem: { type: 'STRING' },
-    blocosPersonagem: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: { en: { type: 'STRING' }, pt: { type: 'STRING' } },
-        required: ['en', 'pt'],
-        propertyOrdering: ['en', 'pt']
-      }
-    },
+    blocosPersonagem: SCHEMA_BLOCOS,
     proximaFala: { type: 'STRING' },
     traducao: { type: 'STRING' },
     chunk: { type: 'STRING' },
+    blocos: SCHEMA_BLOCOS,
     fimDaCena: { type: 'BOOLEAN' }
   },
   required: [
     'acertou', 'transcricao', 'palavrasErradas', 'macete', 'feedback',
     'cena', 'falaPersonagem', 'traducaoPersonagem', 'blocosPersonagem',
-    'proximaFala', 'traducao', 'chunk', 'fimDaCena'
+    'proximaFala', 'traducao', 'chunk', 'blocos', 'fimDaCena'
   ],
   propertyOrdering: [
     'transcricao', 'acertou', 'palavrasErradas', 'macete', 'feedback',
     'cena', 'falaPersonagem', 'traducaoPersonagem', 'blocosPersonagem',
-    'proximaFala', 'traducao', 'chunk', 'fimDaCena'
+    'proximaFala', 'traducao', 'chunk', 'blocos', 'fimDaCena'
   ]
 };
 
@@ -142,12 +147,11 @@ function normalizar(r, entrada) {
     cena: texto(r.cena, 400),
     falaPersonagem: texto(r.falaPersonagem, 300),
     traducaoPersonagem: texto(r.traducaoPersonagem, 300),
-    blocosPersonagem: limitarBlocos(Array.isArray(r.blocosPersonagem)
-      ? r.blocosPersonagem.map((b) => ({ en: texto(b && b.en, 300), pt: texto(b && b.pt, 300) }))
-      : []),
+    blocosPersonagem: lerBlocos(r.blocosPersonagem),
     proximaFala: texto(r.proximaFala, 300),
     traducao: texto(r.traducao, 300),
     chunk: texto(r.chunk, 200),
+    blocos: lerBlocos(r.blocos),
     fimDaCena: r.fimDaCena === true
   };
 
@@ -160,9 +164,16 @@ function normalizar(r, entrada) {
     resultado.falaPersonagem = '';
     resultado.traducaoPersonagem = '';
     resultado.blocosPersonagem = [];
+    resultado.blocos = [];
     resultado.fimDaCena = false;
   }
   return resultado;
+}
+
+function lerBlocos(lista) {
+  return limitarBlocos(Array.isArray(lista)
+    ? lista.map((b) => ({ en: texto(b && b.en, 300), pt: texto(b && b.pt, 300) }))
+    : []);
 }
 
 // No máximo 3 blocos: junta os vizinhos mais curtos (a união dos "en" continua igual à fala).
@@ -179,20 +190,37 @@ function limitarBlocos(blocos) {
 }
 
 // Os blocos precisam formar a fala inteira (ignorando espaços e pontuação) e ter tradução em todos.
-function validarBlocos(r) {
-  if (!r.falaPersonagem) return '';
-  const blocos = r.blocosPersonagem;
-  if (!blocos.length) return 'blocosPersonagem veio vazio';
-  if (blocos.some((b) => !b.en || !b.pt)) return 'algum bloco de blocosPersonagem veio com "en" ou "pt" vazio';
-  if (compactar(blocos.map((b) => b.en).join(' ')) !== compactar(r.falaPersonagem)) {
-    return 'juntando os "en" de blocosPersonagem não dá exatamente a falaPersonagem';
+function problemaNosBlocos(blocos, fala, campo, nomeFala) {
+  if (!fala) return '';
+  if (!blocos.length) return `${campo} veio vazio`;
+  if (blocos.some((b) => !b.en || !b.pt)) return `algum bloco de ${campo} veio com "en" ou "pt" vazio`;
+  if (compactar(blocos.map((b) => b.en).join(' ')) !== compactar(fala)) {
+    return `juntando os "en" de ${campo} não dá exatamente a ${nomeFala}`;
   }
   return '';
 }
 
-// Blocos inválidos nas tentativas: o app divide a fala sozinho e mostra traducaoPersonagem em cima.
+function problemaBlocosPersonagem(r) {
+  return problemaNosBlocos(r.blocosPersonagem, r.falaPersonagem, 'blocosPersonagem', 'falaPersonagem');
+}
+
+// Os blocos do aluno só contam quando a cena avança para uma nova proximaFala.
+function problemaBlocosAluno(r) {
+  return r.acertou ? problemaNosBlocos(r.blocos, r.proximaFala, 'blocos', 'proximaFala') : '';
+}
+
+function validarBlocos(r) {
+  return problemaBlocosPersonagem(r) || problemaBlocosAluno(r);
+}
+
+// Blocos inválidos nas tentativas: o app divide sozinho (a fala do personagem em cada frase,
+// a do aluno antes do "+" ou "[" do chunk) e mostra a tradução inteira em cima.
 function semBlocos(r) {
-  return { ...r, blocosPersonagem: [] };
+  return {
+    ...r,
+    blocosPersonagem: problemaBlocosPersonagem(r) ? [] : r.blocosPersonagem,
+    blocos: problemaBlocosAluno(r) ? [] : r.blocos
+  };
 }
 
 const ACENTOS_PT = /[áàâãéêíóôõúç]/i;
@@ -384,7 +412,7 @@ module.exports = async function handler(req, res) {
   if (restante > 4000) {
     const aviso = problema
       ? `ATENÇÃO: sua resposta anterior foi rejeitada porque ${problema}. Responda de novo seguindo TODAS as regras, principalmente a REGRA FIRME sobre proximaFala.`
-      : `ATENÇÃO: sua resposta anterior foi rejeitada porque ${problemaBlocos}. Responda de novo seguindo TODAS as regras, principalmente a de blocosPersonagem.`;
+      : `ATENÇÃO: sua resposta anterior foi rejeitada porque ${problemaBlocos}. Responda de novo seguindo TODAS as regras, principalmente as de blocosPersonagem e blocos.`;
     const payloadNovo = {
       ...payload,
       contents: [{
@@ -429,6 +457,7 @@ module.exports = async function handler(req, res) {
     falaPersonagem: '',
     traducaoPersonagem: '',
     blocosPersonagem: [],
+    blocos: [],
     proximaFala: texto(entrada.fraseEsperada, 300),
     traducao: texto(entrada.traducao, 300),
     chunk: texto(entrada.chunk, 200),

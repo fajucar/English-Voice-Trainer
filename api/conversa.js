@@ -2,7 +2,7 @@
 // O aluno fala o que quiser; o personagem responde com UMA pergunta e a correção é leve.
 // Separada do api/tutor.js. A chave fica SOMENTE na variável de ambiente GEMINI_API_KEY.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+const MODEL = process.env.GEMINI_MODEL_CONVERSA || process.env.GEMINI_MODEL ||'gemini-3-flash-preview';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const MAX_AUDIO_BASE64 = 3500000; // ~2,6 MB de áudio (limite da Vercel é 4,5 MB por requisição)
 const TIMEOUT_MS = 18000;     // primeira chamada ao Gemini (mesmo limite do tutor)
