@@ -45,6 +45,9 @@ COMO CONTINUAR A HISTÓRIA
 - Se acertou = true: avance a cena.
   - "cena": 1 ou 2 frases em português contando o que acontece agora (ex.: "O barista anota seu pedido e pergunta o tamanho:").
   - "falaPersonagem": o que o outro personagem diz agora, em inglês simples e curto.
+  - "traducaoPersonagem": tradução natural da falaPersonagem inteira para o português do Brasil.
+  - "blocosPersonagem": a falaPersonagem dividida em blocos curtos, na ordem, cada um { "en": trecho em inglês, "pt": tradução daquele trecho }. Divida em cada frase (ponto final, exclamação ou interrogação). No máximo 3 blocos: se a fala tiver mais frases, junte as curtas no mesmo bloco. Juntando todos os "en" tem que dar exatamente a falaPersonagem, com as mesmas palavras na mesma ordem. "pt" nunca pode ficar vazio.
+    Ex.: falaPersonagem "Good evening! Welcome. How can I help you?" → [{"en":"Good evening!","pt":"Boa noite!"},{"en":"Welcome.","pt":"Seja bem-vindo."},{"en":"How can I help you?","pt":"Como posso te ajudar?"}]
   - "proximaFala": a próxima frase que o ALUNO deve dizer, em inglês, natural e curta (3 a 10 palavras), útil na vida real, respondendo ao personagem.
   - "traducao": tradução natural da proximaFala para o português do Brasil.
   - "chunk": o pedaço reaproveitável da proximaFala. SEMPRE no formato "bloco fixo + [parte variável]", com o sinal de + antes de cada parte variável entre colchetes. O bloco fixo é o começo do chunk, ANTES do primeiro + ou [, e precisa ter pelo menos 2 palavras. A parte fixa deve aparecer igualzinha dentro da proximaFala.
@@ -52,7 +55,7 @@ COMO CONTINUAR A HISTÓRIA
     Errado: "A [tamanho] [item], please." (sem o +)
     Errado: "A + [tamanho] + [item], please?" (o bloco fixo antes do primeiro + tem só 1 palavra; precisa de pelo menos 2)
   - Reaproveite chunks que já apareceram quando fizer sentido, para fixar.
-- Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "".
+- Se acertou = false: NÃO avance. proximaFala = exatamente a frase esperada, traducao e chunk = os mesmos de antes, cena = "", falaPersonagem = "", traducaoPersonagem = "", blocosPersonagem = [].
 - "fimDaCena": true somente quando a história chegar a um final natural (normalmente depois de 6 a 8 falas do aluno). Nesse caso, falaPersonagem é a despedida do personagem, cena fecha a história em português, e proximaFala é uma despedida curta do aluno (ex.: "Thank you, have a nice day!").
 - REGRA FIRME: proximaFala é obrigatória em todo turno em que acertou:true, exceto quando ultimaFala for true (o contexto avisa com "ÚLTIMA FALA DA CENA: sim"). Nunca devolva proximaFala vazia, nunca repita a fala do personagem nela, e ela deve sempre estar em inglês, com a tradução em português no campo traducao.
 
@@ -69,6 +72,16 @@ const RESPONSE_SCHEMA = {
     feedback: { type: 'STRING' },
     cena: { type: 'STRING' },
     falaPersonagem: { type: 'STRING' },
+    traducaoPersonagem: { type: 'STRING' },
+    blocosPersonagem: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { en: { type: 'STRING' }, pt: { type: 'STRING' } },
+        required: ['en', 'pt'],
+        propertyOrdering: ['en', 'pt']
+      }
+    },
     proximaFala: { type: 'STRING' },
     traducao: { type: 'STRING' },
     chunk: { type: 'STRING' },
@@ -76,11 +89,13 @@ const RESPONSE_SCHEMA = {
   },
   required: [
     'acertou', 'transcricao', 'palavrasErradas', 'macete', 'feedback',
-    'cena', 'falaPersonagem', 'proximaFala', 'traducao', 'chunk', 'fimDaCena'
+    'cena', 'falaPersonagem', 'traducaoPersonagem', 'blocosPersonagem',
+    'proximaFala', 'traducao', 'chunk', 'fimDaCena'
   ],
   propertyOrdering: [
     'transcricao', 'acertou', 'palavrasErradas', 'macete', 'feedback',
-    'cena', 'falaPersonagem', 'proximaFala', 'traducao', 'chunk', 'fimDaCena'
+    'cena', 'falaPersonagem', 'traducaoPersonagem', 'blocosPersonagem',
+    'proximaFala', 'traducao', 'chunk', 'fimDaCena'
   ]
 };
 
@@ -126,6 +141,10 @@ function normalizar(r, entrada) {
     feedback: texto(r.feedback, 200),
     cena: texto(r.cena, 400),
     falaPersonagem: texto(r.falaPersonagem, 300),
+    traducaoPersonagem: texto(r.traducaoPersonagem, 300),
+    blocosPersonagem: limitarBlocos(Array.isArray(r.blocosPersonagem)
+      ? r.blocosPersonagem.map((b) => ({ en: texto(b && b.en, 300), pt: texto(b && b.pt, 300) }))
+      : []),
     proximaFala: texto(r.proximaFala, 300),
     traducao: texto(r.traducao, 300),
     chunk: texto(r.chunk, 200),
@@ -139,9 +158,41 @@ function normalizar(r, entrada) {
     resultado.chunk = texto(entrada.chunk, 200);
     resultado.cena = '';
     resultado.falaPersonagem = '';
+    resultado.traducaoPersonagem = '';
+    resultado.blocosPersonagem = [];
     resultado.fimDaCena = false;
   }
   return resultado;
+}
+
+// No máximo 3 blocos: junta os vizinhos mais curtos (a união dos "en" continua igual à fala).
+function limitarBlocos(blocos) {
+  const b = blocos.slice();
+  while (b.length > 3) {
+    let i = 0;
+    for (let k = 1; k < b.length - 1; k++) {
+      if (b[k].en.length + b[k + 1].en.length < b[i].en.length + b[i + 1].en.length) i = k;
+    }
+    b.splice(i, 2, { en: `${b[i].en} ${b[i + 1].en}`.trim(), pt: `${b[i].pt} ${b[i + 1].pt}`.trim() });
+  }
+  return b;
+}
+
+// Os blocos precisam formar a fala inteira (ignorando espaços e pontuação) e ter tradução em todos.
+function validarBlocos(r) {
+  if (!r.falaPersonagem) return '';
+  const blocos = r.blocosPersonagem;
+  if (!blocos.length) return 'blocosPersonagem veio vazio';
+  if (blocos.some((b) => !b.en || !b.pt)) return 'algum bloco de blocosPersonagem veio com "en" ou "pt" vazio';
+  if (compactar(blocos.map((b) => b.en).join(' ')) !== compactar(r.falaPersonagem)) {
+    return 'juntando os "en" de blocosPersonagem não dá exatamente a falaPersonagem';
+  }
+  return '';
+}
+
+// Blocos inválidos nas tentativas: o app divide a fala sozinho e mostra traducaoPersonagem em cima.
+function semBlocos(r) {
+  return { ...r, blocosPersonagem: [] };
 }
 
 const ACENTOS_PT = /[áàâãéêíóôõúç]/i;
@@ -323,21 +374,22 @@ module.exports = async function handler(req, res) {
 
   let resultado = primeira.json ? normalizar(primeira.json, entrada) : null;
   const problema = resultado ? validar(resultado, entrada) : 'o JSON veio vazio ou quebrado';
-  if (!problema) return res.status(200).json(resultado);
+  const problemaBlocos = resultado && !problema ? validarBlocos(resultado) : '';
+  if (!problema && !problemaBlocos) return res.status(200).json(resultado);
 
-  console.error('[tutor] resposta inválida (tentativa 1):', problema, '| bruto:', primeira.bruto.slice(0, 800));
+  console.error('[tutor] resposta inválida (tentativa 1):', problema || problemaBlocos, '| bruto:', primeira.bruto.slice(0, 800));
 
   // Uma nova tentativa, avisando o Gemini do que faltou, se ainda houver tempo.
   const restante = TEMPO_TOTAL_MS - (Date.now() - inicio);
   if (restante > 4000) {
+    const aviso = problema
+      ? `ATENÇÃO: sua resposta anterior foi rejeitada porque ${problema}. Responda de novo seguindo TODAS as regras, principalmente a REGRA FIRME sobre proximaFala.`
+      : `ATENÇÃO: sua resposta anterior foi rejeitada porque ${problemaBlocos}. Responda de novo seguindo TODAS as regras, principalmente a de blocosPersonagem.`;
     const payloadNovo = {
       ...payload,
       contents: [{
         role: 'user',
-        parts: [
-          ...parts,
-          { text: `ATENÇÃO: sua resposta anterior foi rejeitada porque ${problema}. Responda de novo seguindo TODAS as regras, principalmente a REGRA FIRME sobre proximaFala.` }
-        ]
+        parts: [...parts, { text: aviso }]
       }]
     };
     try {
@@ -345,7 +397,12 @@ module.exports = async function handler(req, res) {
       if (segunda.json) {
         const r2 = normalizar(segunda.json, entrada);
         const problema2 = validar(r2, entrada);
-        if (!problema2) return res.status(200).json(r2);
+        if (!problema2) {
+          const problemaBlocos2 = validarBlocos(r2);
+          if (!problemaBlocos2) return res.status(200).json(r2);
+          console.error('[tutor] blocos inválidos (tentativa 2):', problemaBlocos2, '| bruto:', segunda.bruto.slice(0, 800));
+          return res.status(200).json(semBlocos(r2));
+        }
         console.error('[tutor] resposta inválida (tentativa 2):', problema2, '| bruto:', segunda.bruto.slice(0, 800));
         if (!resultado) resultado = r2;
       } else if (!segunda.erroHttp) {
@@ -361,12 +418,17 @@ module.exports = async function handler(req, res) {
     return res.status(502).json({ erro: 'Resposta inesperada do Gemini. Tente de novo.' });
   }
 
+  // A primeira resposta só falhou nos blocos: segue com ela e o app divide a fala.
+  if (!problema) return res.status(200).json(semBlocos(resultado));
+
   // Acertou, mas sem próxima fala válida: mantém a frase atual e avisa o app.
   return res.status(200).json({
     ...resultado,
     semProximaFala: true,
     cena: '',
     falaPersonagem: '',
+    traducaoPersonagem: '',
+    blocosPersonagem: [],
     proximaFala: texto(entrada.fraseEsperada, 300),
     traducao: texto(entrada.traducao, 300),
     chunk: texto(entrada.chunk, 200),
