@@ -340,6 +340,18 @@ button:disabled { opacity: 0.4; cursor: default; }
 .practice-result .wrong-words { margin: 6px 0; }
 .practice-heard { margin-top: 6px; font-size: 0.82rem; color: var(--muted); }
 
+/* ---------- Blocos com tradução em cima (balões do aluno e do personagem) ---------- */
+.blocks { display: grid; gap: 8px; margin-top: 6px; }
+.block {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.block-pt { font-size: 0.82rem; color: var(--muted); }
+.block-en { font-size: 1.05rem; font-weight: 600; }
+.block .bubble-actions { margin-top: 6px; }
+
 /* ---------- Conversa livre ---------- */
 .bubble.character .pt { font-size: 0.85rem; color: var(--muted); margin-top: 2px; }
 .bubble.free-me { max-width: 92%; }

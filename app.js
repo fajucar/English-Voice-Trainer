@@ -16,6 +16,10 @@ const SCENARIOS = [
     abertura: {
       cena: 'Você entra no Starbucks numa manhã fria em Nova York. A fila anda e chega a sua vez. O barista sorri:',
       falaPersonagem: 'Hi! What can I get for you?',
+      blocosPersonagem: [
+        { en: 'Hi!', pt: 'Oi!' },
+        { en: 'What can I get for you?', pt: 'O que vai querer?' }
+      ],
       frase: 'Can I have a latte, please?',
       traducao: 'Pode me ver um latte, por favor?',
       chunk: 'Can I have a + [item], please?'
@@ -36,6 +40,11 @@ const SCENARIOS = [
     abertura: {
       cena: 'Você chega no hotel em Miami depois de um voo longo, puxando a mala até a recepção. A recepcionista diz:',
       falaPersonagem: 'Good evening! Welcome. How can I help you?',
+      blocosPersonagem: [
+        { en: 'Good evening!', pt: 'Boa noite!' },
+        { en: 'Welcome.', pt: 'Seja bem-vindo.' },
+        { en: 'How can I help you?', pt: 'Como posso te ajudar?' }
+      ],
       frase: 'Hi, I have a reservation for tonight.',
       traducao: 'Oi, eu tenho uma reserva para hoje à noite.',
       chunk: 'I have a reservation for + [quando]'
@@ -56,6 +65,9 @@ const SCENARIOS = [
     abertura: {
       cena: 'Você desce do avião em Orlando e chega na fila da imigração. O oficial pega seu passaporte e pergunta:',
       falaPersonagem: "What's the purpose of your visit?",
+      blocosPersonagem: [
+        { en: "What's the purpose of your visit?", pt: 'Qual é o motivo da sua visita?' }
+      ],
       frase: "I'm here on vacation.",
       traducao: 'Estou aqui de férias.',
       chunk: "I'm here on + [motivo]"
@@ -76,6 +88,10 @@ const SCENARIOS = [
     abertura: {
       cena: 'Primeira reunião online com o time dos EUA. Todo mundo liga a câmera e a gerente diz:',
       falaPersonagem: "Hi everyone! Let's start with quick introductions.",
+      blocosPersonagem: [
+        { en: 'Hi everyone!', pt: 'Oi, pessoal!' },
+        { en: "Let's start with quick introductions.", pt: 'Vamos começar com apresentações rápidas.' }
+      ],
       frase: 'Hi everyone, nice to meet you all.',
       traducao: 'Oi pessoal, prazer conhecer vocês.',
       chunk: 'Nice to meet + [quem]'
@@ -258,7 +274,11 @@ function presentTurn(t) {
   if (!t.frase) return showMissingNext();
   if (t.cena) addBubble('scene', esc(t.cena));
   if (t.falaPersonagem) {
-    addBubble('character', `<div class="speaker">${esc(state.scenario.personagem)}</div><div class="en">${esc(t.falaPersonagem)}</div>${practiceBar(t.falaPersonagem)}`);
+    const { blocos, traducao } = characterBlocks(t.falaPersonagem, t.blocosPersonagem, t.traducaoPersonagem);
+    addBubble('character', `
+      <div class="speaker">${esc(state.scenario.personagem)}</div>
+      ${traducao ? `<div class="pt">${esc(traducao)}</div>` : ''}
+      ${blocksHtml(blocos)}`);
   }
   state.turn = {
     frase: t.frase,
@@ -271,6 +291,50 @@ function presentTurn(t) {
   state.targetEl = null;
   renderTarget([]);
   speakTurn();
+}
+
+/* ================= Blocos com tradução ================= */
+const MAX_BLOCOS = 3; // falas longas não esticam a tela
+
+function compactText(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, '');
+}
+
+// Junta blocos vizinhos (o par mais curto primeiro) até sobrarem no máximo MAX_BLOCOS.
+function limitBlocks(blocos) {
+  const b = blocos.slice();
+  while (b.length > MAX_BLOCOS) {
+    let i = 0;
+    for (let k = 1; k < b.length - 1; k++) {
+      if (b[k].en.length + b[k + 1].en.length < b[i].en.length + b[i + 1].en.length) i = k;
+    }
+    b.splice(i, 2, { en: `${b[i].en} ${b[i + 1].en}`, pt: [b[i].pt, b[i + 1].pt].filter(Boolean).join(' ') });
+  }
+  return b;
+}
+
+// Blocos da fala do personagem: usa os que vieram se juntos formam a fala (ignorando espaços e pontuação)
+// e todos têm tradução; se não, divide em cada . ! ? e a tradução inteira vai em cima do balão.
+function characterBlocks(fala, blocos, traducaoInteira) {
+  const lista = (Array.isArray(blocos) ? blocos : [])
+    .map((b) => ({ en: String((b && b.en) || '').trim(), pt: String((b && b.pt) || '').trim() }));
+  const validos = lista.length
+    && lista.every((b) => b.en && b.pt)
+    && compactText(lista.map((b) => b.en).join(' ')) === compactText(fala);
+  if (validos) return { blocos: limitBlocks(lista), traducao: '' };
+  const frases = String(fala).split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  return { blocos: limitBlocks(frases.map((en) => ({ en, pt: '' }))), traducao: traducaoInteira || '' };
+}
+
+// Componente dos blocos, o mesmo para os balões do aluno e do personagem:
+// tradução em cima, inglês no meio, 🔊 🐢 🎤 embaixo (o 🎤 treina só o bloco).
+function blocksHtml(blocos) {
+  return `<div class="blocks">${blocos.map((b) => `
+    <div class="block">
+      ${b.pt ? `<div class="block-pt">${esc(b.pt)}</div>` : ''}
+      <div class="block-en">${esc(b.en)}</div>
+      ${practiceBar(b.en)}
+    </div>`).join('')}</div>`;
 }
 
 function normalizeWord(w) {
@@ -406,6 +470,8 @@ function handleResult(r, { pulou = false } = {}) {
       presentTurn({
         cena: r.cena,
         falaPersonagem: r.falaPersonagem,
+        blocosPersonagem: r.blocosPersonagem,
+        traducaoPersonagem: r.traducaoPersonagem,
         frase: r.proximaFala,
         traducao: r.traducao,
         chunk: r.chunk
@@ -675,7 +741,8 @@ function onThreadClick(e) {
   const btn = e.target.closest('.act-btn');
   if (!btn || btn.disabled) return;
   const frase = btn.closest('.bubble-actions').dataset.frase;
-  const balao = btn.closest('.bubble, .target');
+  // Num bloco, o resultado do treino aparece no próprio bloco.
+  const balao = btn.closest('.block, .bubble, .target');
   const act = btn.dataset.act;
 
   if (act === 'ouvir') return speakFromBubble(frase, 0.9, btn);
