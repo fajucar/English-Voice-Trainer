@@ -120,7 +120,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 /* ---------- Conversa ---------- */
 .thread {
   flex: 1;
-  padding: 16px 16px 24px;
+  /* Espaço no fim com a altura real da barra fixa de baixo (medida no app.js, já com a área segura). */
+  padding: 16px 16px calc(var(--dock-h, 200px) + 16px);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -209,8 +210,13 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 /* ---------- Dock / microfone ---------- */
 .dock {
-  position: sticky;
+  position: fixed;
+  left: 0;
+  right: 0;
   bottom: 0;
+  z-index: 4;
+  max-width: 560px;
+  margin: 0 auto;
   padding: 10px 16px calc(14px + var(--safe-bottom));
   background: linear-gradient(to top, var(--bg) 75%, rgba(9, 13, 22, 0));
   display: flex;
@@ -351,6 +357,24 @@ button:disabled { opacity: 0.4; cursor: default; }
 .block-pt { font-size: 0.82rem; color: var(--muted); }
 .block-en { font-size: 1.05rem; font-weight: 600; }
 .block .bubble-actions { margin-top: 6px; }
+.block .target-en { font-size: 1.3rem; margin: 2px 0 0; }
+.block.block-err { border-color: var(--err); background: var(--err-bg); }
+.word { cursor: pointer; border-radius: 4px; }
+.word.speaking { background: rgba(79, 140, 255, 0.25); }
+.word-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.word-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--err);
+  background: transparent;
+  color: var(--err);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.word-btn.speaking { background: var(--err-bg); }
+.target-whole { margin-top: 12px; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.target-whole + .bubble-actions { margin-top: 4px; }
 
 /* ---------- Conversa livre ---------- */
 .bubble.character .pt { font-size: 0.85rem; color: var(--muted); margin-top: 2px; }

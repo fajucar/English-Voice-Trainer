@@ -1,4 +1,4 @@
-const CACHE_NAME = 'voice-trainer-v8';
+const CACHE_NAME = 'voice-trainer-v9';
 const ASSETS = [
   '/',
   '/style.css',

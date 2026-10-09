@@ -22,7 +22,11 @@ const SCENARIOS = [
       ],
       frase: 'Can I have a latte, please?',
       traducao: 'Pode me ver um latte, por favor?',
-      chunk: 'Can I have a + [item], please?'
+      chunk: 'Can I have a + [item], please?',
+      blocos: [
+        { en: 'Can I have a', pt: 'Pode me ver um' },
+        { en: 'latte, please?', pt: 'latte, por favor?' }
+      ]
     },
     aberturaLivre: {
       falaPersonagem: "Here's your latte! Is this your first time in New York?",
@@ -47,7 +51,11 @@ const SCENARIOS = [
       ],
       frase: 'Hi, I have a reservation for tonight.',
       traducao: 'Oi, eu tenho uma reserva para hoje à noite.',
-      chunk: 'I have a reservation for + [quando]'
+      chunk: 'I have a reservation for + [quando]',
+      blocos: [
+        { en: 'Hi, I have a reservation for', pt: 'Oi, eu tenho uma reserva para' },
+        { en: 'tonight.', pt: 'hoje à noite.' }
+      ]
     },
     aberturaLivre: {
       falaPersonagem: "Here's your room key. Is this your first time in Miami?",
@@ -70,7 +78,11 @@ const SCENARIOS = [
       ],
       frase: "I'm here on vacation.",
       traducao: 'Estou aqui de férias.',
-      chunk: "I'm here on + [motivo]"
+      chunk: "I'm here on + [motivo]",
+      blocos: [
+        { en: "I'm here on", pt: 'Estou aqui de' },
+        { en: 'vacation.', pt: 'férias.' }
+      ]
     },
     aberturaLivre: {
       falaPersonagem: "Okay, you're all set. Is this your first trip to the United States?",
@@ -94,7 +106,11 @@ const SCENARIOS = [
       ],
       frase: 'Hi everyone, nice to meet you all.',
       traducao: 'Oi pessoal, prazer conhecer vocês.',
-      chunk: 'Nice to meet + [quem]'
+      chunk: 'Nice to meet + [quem]',
+      blocos: [
+        { en: 'Hi everyone, nice to meet', pt: 'Oi pessoal, prazer em conhecer' },
+        { en: 'you all.', pt: 'vocês.' }
+      ]
     },
     aberturaLivre: {
       falaPersonagem: 'Great to have you on the team! What do you like to do on weekends?',
@@ -145,6 +161,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 function show(name) {
   ['home', 'chat', 'history'].forEach((s) => { $('screen-' + s).hidden = s !== name; });
   window.scrollTo(0, 0);
+  if (name === 'chat') updateDockSpace();
+}
+
+// A barra de baixo é fixa: o fim da conversa ganha um espaço com a altura real dela.
+// A altura medida já inclui a área segura do celular (o padding de baixo da barra usa env(safe-area-inset-bottom)).
+function updateDockSpace() {
+  const dock = document.querySelector('#screen-chat .dock');
+  if (!dock) return;
+  const h = Math.ceil(dock.getBoundingClientRect().height || dock.offsetHeight || 0);
+  document.documentElement.style.setProperty('--dock-h', h + 'px');
 }
 
 function renderHome() {
@@ -218,7 +244,8 @@ async function speakTurn({ withCharacter = true, slow = false } = {}) {
     await speak(t.falaPersonagem, { rate: 0.95, pitch: 1.15 });
     await wait(350);
   }
-  if (state.turn === t) await speak(t.frase, { rate: slow ? SLOW_RATE : 0.9 });
+  // Não fala a frase se o aluno já começou a gravar nesse meio-tempo (a voz entraria na gravação).
+  if (state.turn === t && !state.rec) await speak(t.frase, { rate: slow ? SLOW_RATE : 0.9 });
 }
 
 /* ================= Conversa ================= */
@@ -284,6 +311,7 @@ function presentTurn(t) {
     frase: t.frase,
     traducao: t.traducao,
     chunk: t.chunk,
+    blocos: t.blocos,
     falaPersonagem: t.falaPersonagem || ''
   };
   state.ultimoTurnoValido = state.turn;
@@ -313,42 +341,90 @@ function limitBlocks(blocos) {
   return b;
 }
 
-// Blocos da fala do personagem: usa os que vieram se juntos formam a fala (ignorando espaços e pontuação)
-// e todos têm tradução; se não, divide em cada . ! ? e a tradução inteira vai em cima do balão.
-function characterBlocks(fala, blocos, traducaoInteira) {
+// Blocos que vieram prontos só valem se juntos formam a fala (ignorando espaços e pontuação)
+// e todos têm tradução. Devolve null se não valem.
+function validBlocks(blocos, fala) {
   const lista = (Array.isArray(blocos) ? blocos : [])
     .map((b) => ({ en: String((b && b.en) || '').trim(), pt: String((b && b.pt) || '').trim() }));
   const validos = lista.length
     && lista.every((b) => b.en && b.pt)
     && compactText(lista.map((b) => b.en).join(' ')) === compactText(fala);
-  if (validos) return { blocos: limitBlocks(lista), traducao: '' };
+  return validos ? limitBlocks(lista) : null;
+}
+
+// Fala do personagem: sem blocos válidos, divide em cada . ! ? e a tradução inteira vai em cima do balão.
+function characterBlocks(fala, blocos, traducaoInteira) {
+  const prontos = validBlocks(blocos, fala);
+  if (prontos) return { blocos: prontos, traducao: '' };
   const frases = String(fala).split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
   return { blocos: limitBlocks(frases.map((en) => ({ en, pt: '' }))), traducao: traducaoInteira || '' };
 }
 
+// Frase do aluno: sem blocos válidos, divide logo depois do bloco fixo do chunk (antes do "+" ou "[")
+// e a tradução inteira vai em cima. Sem bloco fixo achado na frase, fica 1 bloco só.
+function studentBlocks(frase, blocos, chunk, traducaoInteira) {
+  const prontos = validBlocks(blocos, frase);
+  if (prontos) return { blocos: prontos, traducao: '' };
+  const fixo = String(chunk || '').split(/[+[]/)[0].trim().replace(/[.,!?]+$/, '');
+  const ini = fixo.length > 1 ? frase.toLowerCase().indexOf(fixo.toLowerCase()) : -1;
+  const fim = ini >= 0 ? ini + fixo.length : -1;
+  const partes = fim > 0 ? [frase.slice(0, fim).trim(), frase.slice(fim).trim()] : [frase.trim()];
+  // O resto só vira bloco se tiver alguma palavra (não só pontuação).
+  if (partes.length === 2 && !/[a-z0-9]/i.test(partes[1])) partes.splice(0, 2, frase.trim());
+  return { blocos: partes.map((en) => ({ en, pt: '' })), traducao: traducaoInteira || '' };
+}
+
+// Índice do primeiro bloco que contém uma das palavras erradas (-1 se nenhum).
+function wrongBlockIndex(blocos, badWords) {
+  const bad = badWordSet(badWords);
+  if (!bad.size) return -1;
+  return blocos.findIndex((b) => b.en.split(/\s+/).some((w) => bad.has(normalizeWord(w))));
+}
+
 // Componente dos blocos, o mesmo para os balões do aluno e do personagem:
-// tradução em cima, inglês no meio, 🔊 🐢 🎤 embaixo (o 🎤 treina só o bloco).
-function blocksHtml(blocos) {
-  return `<div class="blocks">${blocos.map((b) => `
-    <div class="block">
+// tradução em cima, inglês no meio (cada palavra tocável), 🔊 🐢 🎤 embaixo (o 🎤 treina só o bloco).
+// opts: { chunk, bad, enClass } — o bloco com palavra errada fica destacado e ganha um botão por palavra.
+function blocksHtml(blocos, opts = {}) {
+  const bad = opts.bad || [];
+  const errIdx = wrongBlockIndex(blocos, bad);
+  const badSet = badWordSet(bad);
+  return `<div class="blocks">${blocos.map((b, i) => {
+    const erradas = i === errIdx
+      ? [...new Set(b.en.split(/\s+/).filter((w) => badSet.has(normalizeWord(w))).map(cleanWord))]
+      : [];
+    return `
+    <div class="block${i === errIdx ? ' block-err' : ''}">
       ${b.pt ? `<div class="block-pt">${esc(b.pt)}</div>` : ''}
-      <div class="block-en">${esc(b.en)}</div>
+      <div class="block-en ${opts.enClass || ''}">${highlightPhrase(b.en, opts.chunk, bad)}</div>
+      ${erradas.length ? `<div class="word-btns">${erradas.map((w) => `<button type="button" class="word-btn" data-word="${esc(w)}" aria-label="Ouvir ${esc(w)} devagar">🔊 ${esc(w)}</button>`).join('')}</div>` : ''}
       ${practiceBar(b.en)}
-    </div>`).join('')}</div>`;
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function normalizeWord(w) {
   return String(w).toLowerCase().replace(/[^a-z0-9']/g, '');
 }
 
+function badWordSet(badWords) {
+  const bad = new Set();
+  (badWords || []).forEach((b) => String(b).split(/\s+/).forEach((w) => { const n = normalizeWord(w); if (n) bad.add(n); }));
+  return bad;
+}
+
+// A palavra sem a pontuação em volta, para a voz falar ("please?" → "please").
+function cleanWord(tok) {
+  return String(tok).replace(/^[^a-z0-9']+|[^a-z0-9']+$/gi, '');
+}
+
 // Destaca o chunk (parte fixa) e sublinha as palavras erradas dentro da frase.
+// Cada palavra vira um <span class="word"> que fala só ela, devagar, quando tocada.
 function highlightPhrase(frase, chunk, badWords) {
   const fixed = String(chunk || '').split(/[+[]/)[0].trim().replace(/[.,!?]+$/, '');
   const start = fixed.length > 1 ? frase.toLowerCase().indexOf(fixed.toLowerCase()) : -1;
   const end = start >= 0 ? start + fixed.length : -1;
 
-  const bad = new Set();
-  (badWords || []).forEach((b) => String(b).split(/\s+/).forEach((w) => { const n = normalizeWord(w); if (n) bad.add(n); }));
+  const bad = badWordSet(badWords);
 
   let html = '';
   let pos = 0;
@@ -362,8 +438,10 @@ function highlightPhrase(frase, chunk, badWords) {
     if (insideChunk && !inMark && !isSpace) { html += '<mark>'; inMark = true; }
     if (!insideChunk && inMark) { html += '</mark>'; inMark = false; }
 
-    if (!isSpace && bad.has(normalizeWord(tok))) {
-      html += `<span class="bad">${esc(tok)}</span>`;
+    const palavra = isSpace ? '' : cleanWord(tok);
+    if (palavra) {
+      const cls = bad.has(normalizeWord(tok)) ? 'word bad' : 'word';
+      html += `<span class="${cls}" data-word="${esc(palavra)}">${esc(tok)}</span>`;
     } else {
       html += esc(tok);
     }
@@ -387,13 +465,16 @@ function renderTarget(badWords) {
     fallback = true;
   }
   const el = state.targetEl || document.createElement('div');
+  const { blocos, traducao } = studentBlocks(t.frase, t.blocos, t.chunk, t.traducao);
   el.className = 'target';
+  // Tradução por bloco em cima de cada um; a tradução inteira só aparece quando o app dividiu sozinho.
   el.innerHTML = `
     ${fallback ? '<div class="target-warn">⚠️ Mostrando a última frase válida.</div>' : ''}
     <div class="target-label">Sua vez de falar</div>
-    <div class="target-en">${highlightPhrase(t.frase, t.chunk, badWords)}</div>
-    <div class="target-pt">${esc(t.traducao)}</div>
+    ${traducao ? `<div class="target-pt">${esc(traducao)}</div>` : ''}
+    ${blocksHtml(blocos, { chunk: t.chunk, bad: badWords, enClass: 'target-en' })}
     ${t.chunk ? `<div class="chunk">🧩 ${renderChunk(t.chunk)}</div>` : ''}
+    <div class="target-whole">Frase inteira</div>
     ${practiceBar(t.frase)}`;
   if (!state.targetEl) {
     $('thread').appendChild(el);
@@ -430,7 +511,7 @@ function setMicState(mode) {
 // Só uma gravação por vez: enquanto grava ou espera o Gemini, só o botão ativo fica disponível (para parar).
 function syncBubbleButtons(mode) {
   const ativo = (state.rec && state.rec.alvo.btn) || (state.praticando && state.praticando.btn) || null;
-  document.querySelectorAll('#thread .act-btn').forEach((b) => {
+  document.querySelectorAll('#thread .act-btn, #thread .word-btn').forEach((b) => {
     const isAtivo = b === ativo;
     b.classList.toggle('recording', isAtivo && mode === 'recording');
     b.classList.toggle('busy', isAtivo && mode === 'busy');
@@ -474,7 +555,8 @@ function handleResult(r, { pulou = false } = {}) {
         traducaoPersonagem: r.traducaoPersonagem,
         frase: r.proximaFala,
         traducao: r.traducao,
-        chunk: r.chunk
+        chunk: r.chunk,
+        blocos: r.blocos
       });
     }
   } else {
@@ -493,11 +575,22 @@ function handleResult(r, { pulou = false } = {}) {
     if (state.targetEl) $('thread').appendChild(state.targetEl);
     renderTarget(palavras);
     setHint(state.tentativasFrase >= 3 ? 'Travou? Tudo bem, pode pular ⏭' : 'Ouça de novo e repita');
-    wait(600).then(() => { if (!state.rec) speakTurn({ withCharacter: false, slow: true }); });
+    wait(600).then(() => { if (!state.rec) speakWrongBlock(palavras); });
   }
 
   updateScore();
   saveSession();
+}
+
+// Repetição lenta depois do erro: só o bloco com a palavra errada (ou a frase inteira, se não achar).
+function speakWrongBlock(palavras) {
+  const t = state.turn;
+  if (!t) return;
+  const { blocos } = studentBlocks(t.frase, t.blocos, t.chunk, t.traducao);
+  const i = wrongBlockIndex(blocos, palavras);
+  if (i < 0) return speakTurn({ withCharacter: false, slow: true });
+  stopSpeaking();
+  speak(blocos[i].en, { rate: SLOW_RATE });
 }
 
 function registerSpokenLine() {
@@ -664,7 +757,8 @@ async function processRecording(rec) {
 }
 
 function showPracticeResult(balao, tipo, html) {
-  const box = balao && balao.querySelector('.practice-result');
+  // Só o resultado do próprio balão/bloco, não o de um bloco lá dentro.
+  const box = balao && balao.querySelector(':scope > .practice-result');
   if (!box) return;
   box.className = 'practice-result ' + tipo;
   box.innerHTML = html;
@@ -725,6 +819,19 @@ function speakFromBubble(frase, rate, btn) {
   });
 }
 
+// Uma palavra sozinha, a 0.55x. Algumas vozes do navegador leem a palavra solta na forma "de dicionário"
+// (ex.: "a" como "ei", "the" como "dí"), diferente de como ela soa dentro da frase.
+function speakWord(palavra, el) {
+  if (!palavra) return;
+  stopSpeaking();
+  const id = ++speakSeq;
+  el.dataset.speakId = id;
+  el.classList.add('speaking');
+  speak(palavra, { rate: SLOW_RATE }).then(() => {
+    if (el.dataset.speakId === String(id)) el.classList.remove('speaking');
+  });
+}
+
 // Fileira de botões de treino embaixo da frase em inglês de um balão.
 function practiceBar(frase) {
   return `
@@ -738,6 +845,12 @@ function practiceBar(frase) {
 
 // Um único listener para os botões de todos os balões, inclusive os antigos.
 function onThreadClick(e) {
+  // Palavra tocada (ou botão de palavra errada): fala só ela, devagar. Nunca durante uma gravação.
+  const palavra = e.target.closest('.word, .word-btn');
+  if (palavra) {
+    if (state.rec || state.busy || palavra.disabled) return;
+    return speakWord(palavra.dataset.word, palavra);
+  }
   const btn = e.target.closest('.act-btn');
   if (!btn || btn.disabled) return;
   const frase = btn.closest('.bubble-actions').dataset.frase;
@@ -1489,6 +1602,10 @@ if (SpeechRec) {
   $('btnTeacherMic').hidden = false;
   $('btnTeacherMic').addEventListener('click', toggleTeacherMic);
 }
+
+// A barra muda de altura (botões que quebram linha, "Encerrar conversa", dica do microfone, teclado, giro da tela).
+window.addEventListener('resize', updateDockSpace);
+if (window.ResizeObserver) new ResizeObserver(updateDockSpace).observe(document.querySelector('#screen-chat .dock'));
 
 renderHome();
 
